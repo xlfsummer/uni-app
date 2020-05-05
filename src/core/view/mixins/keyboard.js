@@ -44,7 +44,10 @@ export default {
   methods: {
     initKeyboard (el) {
       el.addEventListener('focus', () => {
-        UniViewJSBridge.subscribe('hideKeyboard', hideKeyboard)
+        this.hideKeyboardTemp = function () {
+          hideKeyboard()
+        }
+        UniViewJSBridge.subscribe('hideKeyboard', this.hideKeyboardTemp)
         document.addEventListener('click', iosHideKeyboard, false)
         this.setSoftinputNavBar()
         this.setSoftinputTemporary()
@@ -60,12 +63,9 @@ export default {
       plusReady(() => {
         const currentWebview = plus.webview.currentWebview()
         const style = currentWebview.getStyle() || {}
-        if (style.softinputMode === 'adjustResize') {
-          return
-        }
         const rect = this.$el.getBoundingClientRect()
         currentWebview.setSoftinputTemporary && currentWebview.setSoftinputTemporary({
-          mode: this.adjustPosition ? 'adjustPan' : 'nothing',
+          mode: style.softinputMode === 'adjustResize' ? 'adjustResize' : (this.adjustPosition ? 'adjustPan' : 'nothing'),
           position: {
             top: rect.top,
             height: rect.height + (Number(this.cursorSpacing) || 0)
@@ -104,9 +104,13 @@ export default {
       }
     },
     onKeyboardHide () {
-      UniViewJSBridge.unsubscribe('hideKeyboard', hideKeyboard)
+      UniViewJSBridge.unsubscribe('hideKeyboard', this.hideKeyboardTemp)
       document.removeEventListener('click', iosHideKeyboard, false)
       this.resetSoftinputNavBar()
+      // 修复ios端显示与点击位置错位的Bug by:wyq
+      if (String(navigator.vendor).indexOf('Apple') === 0) {
+        document.documentElement.scrollTo(document.documentElement.scrollLeft, document.documentElement.scrollTop)
+      }
     }
   }
 }

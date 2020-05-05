@@ -87,8 +87,8 @@ function createKeepAliveApiCallback (apiName, callback) {
   const callbackId = invokeCallbackId++
   const invokeCallbackName = 'api.' + apiName + '.' + callbackId
 
-  const invokeCallback = function (res) {
-    callback(res)
+  const invokeCallback = function (res, extras) {
+    callback(res, extras)
   }
 
   invokeCallbacks[callbackId] = {
@@ -108,7 +108,7 @@ function createApiCallback (apiName, params = {}, extras = {}) {
   params = Object.assign({}, params)
 
   const apiCallbacks = {}
-  for (let name in params) {
+  for (const name in params) {
     const param = params[name]
     if (isFn(param)) {
       apiCallbacks[name] = tryCatch(param)
@@ -135,7 +135,7 @@ function createApiCallback (apiName, params = {}, extras = {}) {
   }
 
   const wrapperCallbacks = {}
-  for (let name in extras) {
+  for (const name in extras) {
     const extra = extras[name]
     if (isFn(extra)) {
       wrapperCallbacks[name] = tryCatchFramework(extra)
@@ -165,7 +165,7 @@ function createApiCallback (apiName, params = {}, extras = {}) {
       res.errMsg = apiName + ':cancel'
     } else if (res.errMsg.indexOf(':fail') !== -1) {
       let errDetail = ''
-      let spaceIndex = res.errMsg.indexOf(' ')
+      const spaceIndex = res.errMsg.indexOf(' ')
       if (spaceIndex > -1) {
         errDetail = res.errMsg.substr(spaceIndex)
       }
@@ -232,15 +232,15 @@ function createInvokeCallback (apiName, params = {}, extras = {}) {
     callbackId
   }
 }
-
-export function invokeCallbackHandler (invokeCallbackId, res) {
+// onNativeEventReceive((event,data)=>{}) 需要两个参数，写死最多两个参数，避免改动太大，影响已有逻辑
+export function invokeCallbackHandler (invokeCallbackId, res, extras) {
   if (typeof invokeCallbackId === 'number') {
     const invokeCallback = invokeCallbacks[invokeCallbackId]
     if (invokeCallback) {
       if (!invokeCallback.keepAlive) {
         delete invokeCallbacks[invokeCallbackId]
       }
-      return invokeCallback.callback(res)
+      return invokeCallback.callback(res, extras)
     }
   }
   return res

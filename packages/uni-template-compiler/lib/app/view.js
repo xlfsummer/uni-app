@@ -12,6 +12,7 @@ const {
 
 const {
   parseIs,
+  parseRef,
   parseIf,
   parseFor,
   parseText,
@@ -126,7 +127,7 @@ function transformNode (el, parent, state, isScopedSlot) {
   const genVar = createGenVar(el.attrsMap[ID], isScopedSlot)
 
   parseIs(el, genVar)
-
+  parseRef(el, genVar)
   if (parseFor(el, createGenVar, isScopedSlot)) {
     if (el.alias[0] === '{') { // <div><li v-for=" { a, b }  in items"></li></div>
       el.alias = '$item'
@@ -162,6 +163,7 @@ function postTransformNode (el, options) {
       options.root = el
     }
     traverseNode(el, false, {
+      createGenVar,
       forIteratorId: 0,
       transformNode,
       filterModules: options.filterModules
@@ -206,7 +208,7 @@ function handleViewEvents (events) {
       }
     } else {
       events[name] = {
-        value: `$handleViewEvent($event)`
+        value: '$handleViewEvent($event)'
       }
     }
   })
@@ -218,7 +220,7 @@ function genVModel (el, isScopedSlot) {
     if ((el.tag === 'v-uni-input' || el.tag === 'v-uni-textarea') && !(el.events && el.events.input)) {
       el.model.callback = `function($$v){$handleVModelEvent(${el.attrsMap[ID]},$$v)}`
     } else {
-      el.model.callback = `function(){}`
+      el.model.callback = 'function(){}'
     }
   }
 }

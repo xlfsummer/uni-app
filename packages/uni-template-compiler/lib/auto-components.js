@@ -61,7 +61,7 @@ function generateAutoComponentsCode (autoComponents, dynamic = false) {
     source
   }) => {
     if (dynamic) {
-      components.push(`'${name}': ()=>import(/* webpackChunkName: "${getWebpackChunkName(source)}" */'${source}')`)
+      components.push(`'${name}': function(){return import(/* webpackChunkName: "${getWebpackChunkName(source)}" */'${source}')}`)
     } else {
       components.push(`'${name}': require('${source}').default`)
     }
@@ -86,7 +86,10 @@ function compileTemplate (source, options, compile) {
 
 const compilerModule = {
   preTransformNode (el, options) {
-    if (isComponent(el.tag) && el.tag !== 'App') { // App.vue
+    if (process.env.UNI_PLATFORM === 'quickapp-vue') {
+      // 排查所有标签
+      (options.isUnaryTag.autoComponents || (options.isUnaryTag.autoComponents = new Set())).add(el.tag)
+    } else if (isComponent(el.tag) && el.tag !== 'App') { // App.vue
       // 挂在 isUnaryTag 上边,可以保证外部访问到
       (options.isUnaryTag.autoComponents || (options.isUnaryTag.autoComponents = new Set())).add(el.tag)
     }

@@ -4,6 +4,10 @@ import {
 } from 'uni-shared'
 
 import {
+  wrapperMPEvent
+} from 'uni-helpers/patch'
+
+import {
   VD_SYNC,
   UI_EVENT,
   PAGE_CREATE,
@@ -55,10 +59,7 @@ function wrapperEvent (event) {
   parseTargets(event)
   event.preventDefault = noop
   event.stopPropagation = noop
-  event.mp = event
-  return Object.assign({
-    mp: event // mpvue
-  }, event)
+  return wrapperMPEvent(event)
 }
 
 const handleVdData = {
@@ -138,9 +139,12 @@ export class VDomSync {
 
   removeVm (vm) {
     const cid = vm._$id
-    // 移除尚未同步的data
-    this.batchData = this.batchData.filter(data => data[1][0] !== cid)
-    delete this.vms[cid]
+    if (vm === this.vms[cid]) { // 仅相同vm的才移除，否则保留
+      // 目前同一位置的vm，cid均一样
+      // 移除尚未同步的data
+      this.batchData = this.batchData.filter(data => data[1][0] !== cid)
+      delete this.vms[cid]
+    }
   }
 
   addElement (elm) {
@@ -150,7 +154,10 @@ export class VDomSync {
   removeElement (elm) {
     const elmIndex = this.elements.indexOf(elm)
     if (elmIndex === -1) {
-      return console.error(`removeElement[${elm.cid}][${elm.nid}] not found`)
+      if (process.env.NODE_ENV !== 'production') {
+        console.error(`removeElement[${elm.cid}][${elm.nid}] not found`)
+      }
+      return
     }
     this.elements.splice(elmIndex, 1)
   }

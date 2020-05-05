@@ -19,7 +19,8 @@ import {
 import tabBar from './tab-bar'
 
 import {
-  publish
+  publish,
+  requireNativePlugin
 } from '../bridge'
 
 import {
@@ -55,6 +56,7 @@ export function getApp ({
 }
 
 function initGlobalListeners () {
+  const globalEvent = requireNativePlugin('globalEvent')
   const emit = UniServiceJSBridge.emit
 
   // splashclosed 时开始监听 backbutton
@@ -82,6 +84,16 @@ function initGlobalListeners () {
     publish('onKeyboardHeightChange', {
       height: event.height
     })
+  })
+
+  globalEvent.addEventListener('uistylechange', function (event) {
+    publish('onUIStyleChange', {
+      style: event.uistyle
+    })
+  })
+
+  globalEvent.addEventListener('uniMPNativeEvent', function (event) {
+    publish('uniMPNativeEvent', event)
   })
 
   plus.globalEvent.addEventListener('plusMessage', onPlusMessage)
@@ -188,7 +200,7 @@ function initEntryPage () {
 
 export function registerApp (appVm) {
   if (process.env.NODE_ENV !== 'production') {
-    console.log(`[uni-app] registerApp`)
+    console.log('[uni-app] registerApp')
   }
 
   appCtx = appVm

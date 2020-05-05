@@ -69,6 +69,9 @@ module.exports = function (content) {
   if (process.env.UNI_PLATFORM === 'h5') {
     return require('./platforms/h5')(pagesJson, manifestJson)
   }
+  if (process.env.UNI_PLATFORM === 'quickapp-vue') {
+    return require('./platforms/quickapp-vue')(pagesJson, manifestJson, this)
+  }
 
   if (!process.env.UNI_USING_V3) {
     parsePages(pagesJson, function (page) {
@@ -103,11 +106,11 @@ module.exports = function (content) {
       })
       return appConfigContent
     }
-    if (process.env.UNI_USING_NATIVE) {
+    if (process.env.UNI_USING_NATIVE || process.env.UNI_USING_V3_NATIVE) {
       let appConfigContent = ''
       jsonFiles.forEach(jsonFile => {
         if (jsonFile) {
-          if (jsonFile.name === 'app-config.js') {
+          if (jsonFile.name === 'app-config.js' || jsonFile.name === 'define-pages.js') {
             appConfigContent = jsonFile.content
           } else {
             this.emitFile(jsonFile.name, jsonFile.content)

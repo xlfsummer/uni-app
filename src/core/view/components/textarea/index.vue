@@ -1,7 +1,8 @@
 <template>
   <uni-textarea
     @change.stop
-    v-on="$listeners">
+    v-on="$listeners"
+  >
     <div class="uni-textarea-wrapper">
       <div
         v-show="!(composition||valueSync.length)"
@@ -9,17 +10,26 @@
         :style="placeholderStyle"
         :class="placeholderClass"
         class="uni-textarea-placeholder"
-      >{{ placeholder }}</div>
+      >
+        {{ placeholder }}
+      </div>
       <div
         ref="line"
-        class="uni-textarea-line">&nbsp;</div>
+        class="uni-textarea-line"
+      >
+        &nbsp;
+      </div>
       <div class="uni-textarea-compute">
         <div
           v-for="(item,index) in valueCompute"
-          :key="index">{{ item.trim() ? item : '.' }}</div>
+          :key="index"
+        >
+          {{ item.trim() ? item : '.' }}
+        </div>
         <v-uni-resize-sensor
           ref="sensor"
-          @resize="_resize" />
+          @resize="_resize"
+        />
       </div>
       <textarea
         ref="textarea"
@@ -27,7 +37,7 @@
         :disabled="disabled"
         :maxlength="maxlengthNumber"
         :autofocus="autoFocus"
-        :class="{'uni-textarea-textarea-ios': isIOS}"
+        :class="{'uni-textarea-textarea-fix-margin': fixMargin}"
         :style="{'overflow-y': autoHeight? 'hidden':'auto'}"
         class="uni-textarea-textarea"
         @compositionstart="_compositionstart"
@@ -45,6 +55,7 @@ import {
   emitter,
   keyboard
 } from 'uni-mixins'
+const DARK_TEST_STRING = '(prefers-color-scheme: dark)'
 export default {
   name: 'Textarea',
   mixins: [emitter, keyboard],
@@ -83,7 +94,7 @@ export default {
     },
     placeholderClass: {
       type: String,
-      default: ''
+      default: 'textarea-placeholder'
     },
     placeholderStyle: {
       type: String,
@@ -108,13 +119,14 @@ export default {
   },
   data () {
     return {
-      valueSync: String(this.value),
+      valueSync: this._getValueString(this.value),
       valueComposition: '',
       composition: false,
       focusSync: this.focus,
       height: 0,
       focusChangeSource: '',
-      isIOS: String(navigator.platform).indexOf('iP') === 0 && String(navigator.vendor).indexOf('Apple') === 0 && String(navigator.appVersion).split('OS ')[1].split('_')[0] < 13
+      // iOS 13 以下版本需要修正边距
+      fixMargin: String(navigator.platform).indexOf('iP') === 0 && String(navigator.vendor).indexOf('Apple') === 0 && window.matchMedia(DARK_TEST_STRING).media !== DARK_TEST_STRING
     }
   },
   computed: {
@@ -140,7 +152,7 @@ export default {
   },
   watch: {
     value (val) {
-      this.valueSync = String(val)
+      this.valueSync = this._getValueString(val)
     },
     valueSync (val) {
       if (val !== this._oldValue) {
@@ -205,6 +217,16 @@ export default {
     this._resize({
       height: this.$refs.sensor.$el.offsetHeight
     })
+
+    let $vm = this
+    while ($vm) {
+      const scopeId = $vm.$options._scopeId
+      if (scopeId) {
+        this.$refs.placeholder.setAttribute(scopeId, '')
+      }
+      $vm = $vm.$parent
+    }
+
     this.initKeyboard(this.$refs.textarea)
   },
   beforeDestroy () {
@@ -274,6 +296,9 @@ export default {
     },
     _resetFormData () {
       this.valueSync = ''
+    },
+    _getValueString (value) {
+      return value === null ? '' : String(value)
     }
   }
 }
@@ -347,7 +372,7 @@ uni-textarea[hidden] {
   text-shadow: inherit;
 }
 /* 用于解决 iOS textarea 内部默认边距 */
-.uni-textarea-textarea-ios {
+.uni-textarea-textarea-fix-margin {
   width: auto;
   right: 0;
   margin: 0 -3px;

@@ -34,13 +34,14 @@ const uniCloudPath = path.resolve(__dirname, '../../packages/uni-cloud/dist/inde
 
 function getProvides () {
   return {
-    'uniCloud': [uniCloudPath, 'default'],
+    __f__: [path.resolve(__dirname, '../format-log.js'), 'log'],
+    uniCloud: [uniCloudPath, 'default'],
     'wx.nextTick': [runtimePath, 'nextTick'],
-    'Page': [runtimePath, 'Page'],
-    'Component': [runtimePath, 'Component'],
-    'Behavior': [runtimePath, 'Behavior'],
-    'getDate': [wxsPath, 'getDate'],
-    'getRegExp': [wxsPath, 'getRegExp']
+    Page: [runtimePath, 'Page'],
+    Component: [runtimePath, 'Component'],
+    Behavior: [runtimePath, 'Behavior'],
+    getDate: [wxsPath, 'getDate'],
+    getRegExp: [wxsPath, 'getRegExp']
   }
 }
 
@@ -62,10 +63,6 @@ if (process.env.NODE_ENV !== 'production') {
 const vueConfig = {
   parallel: false, // 因为传入了自定义 compiler，避免参数丢失，禁用parallel
   publicPath,
-  transpileDependencies: [
-    wxsPath,
-    runtimePath
-  ],
   pages: {
     index: {
       // page 的入口
@@ -94,52 +91,41 @@ module.exports = {
   webpackConfig (webpackConfig) {
     let useBuiltIns = 'usage'
 
-    const statCode = process.env.UNI_USING_STAT ? `import '@dcloudio/uni-stat';` : ''
+    const statCode = process.env.UNI_USING_STAT ? 'import \'@dcloudio/uni-stat\';' : ''
 
     try {
       const babelConfig = require(path.resolve(process.env.UNI_CLI_CONTEXT, 'babel.config.js'))
       useBuiltIns = babelConfig.presets[0][1].useBuiltIns
     } catch (e) {}
 
-    const beforeCode = (useBuiltIns === 'entry' ? `import '@babel/polyfill';` : '') +
+    const beforeCode = (useBuiltIns === 'entry' ? 'import \'@babel/polyfill\';' : '') +
       `import 'uni-pages';import 'uni-${process.env.UNI_PLATFORM}';`
 
-    const qihooCode = process.env.UNI_SUB_PLATFORM === 'mp-360'
-      ? `
-import 'uni-touch-emulator';
-import qh from 'uni-qh';
-global.qh = qh;
-global.onAppShow = function(){};
-` : ''
-
     return {
-      devtool: process.env.NODE_ENV === 'production' ? false : 'cheap-module-eval-source-map',
       resolve: {
         extensions: ['.nvue'],
         alias: {
           'vue-router': resolve('packages/h5-vue-router'),
-          'uni-h5': require.resolve('@dcloudio/uni-h5'),
-          'uni-qh': path.resolve(__dirname, 'qh-api.js'),
-          'uni-touch-emulator': path.resolve(__dirname, 'touch-emulator.js')
+          'uni-h5': require.resolve('@dcloudio/uni-h5')
         }
       },
       module: {
         rules: [{
           test: path.resolve(process.env.UNI_INPUT_DIR, getMainEntry()),
           use: [{
-            loader: 'wrap-loader',
+            loader: path.resolve(__dirname, '../../packages/wrap-loader'),
             options: {
               before: [
-                qihooCode + beforeCode + statCode + getGlobalUsingComponentsCode()
+                beforeCode + statCode + getGlobalUsingComponentsCode()
               ]
             }
           }]
         }, {
           test: /App\.vue$/,
           use: {
-            loader: 'wrap-loader',
+            loader: path.resolve(__dirname, '../../packages/wrap-loader'),
             options: {
-              before: [`<template><App :keepAliveInclude="keepAliveInclude"/></template>`]
+              before: ['<template><App :keepAliveInclude="keepAliveInclude"/></template>']
             }
           }
         }, { // 解析组件，css 等
@@ -180,7 +166,14 @@ global.onAppShow = function(){};
       webpackConfig.plugins.delete('preload-index')
     }
 
-    modifyVueLoader(webpackConfig, require('./compiler-options'), api)
+    const compilerOptions = require('./compiler-options')
+    if (publicPath === './') {
+      compilerOptions.publicPath = publicPath
+    }
+    modifyVueLoader(webpackConfig, {
+      isH5: true,
+      hotReload: true
+    }, compilerOptions, api)
 
     if (process.env.NODE_ENV === 'production') {
       require('./cssnano-options')(webpackConfig)

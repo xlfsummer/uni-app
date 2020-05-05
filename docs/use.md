@@ -20,11 +20,8 @@
 详见Vue官方文档：[模板语法](https://cn.vuejs.org/v2/guide/syntax.html)。
 
 **注意**
-如果使用**老版**的非自定义组件模式，即manifest中`"usingComponents":false`，部分模版语法不支持，但此模式已不再推荐使用，[详见](https://ask.dcloud.net.cn/article/35699)。  
+如果使用**老版**的非自定义组件模式，即manifest中`"usingComponents":false`，部分模版语法不支持，但此模式已于2019年11月起下线。
 
-**老版**非自定义组件模式不支持情况（**新版自定义组件模式已不存在此情况**）：
-- 不支持部分复杂的 JavaScript 渲染表达式
-- 不支持过滤器
 
 ## data 属性
 
@@ -466,6 +463,8 @@ index.vue 里可直接使用组件
 **Tips**
 
 - 除以上列表中的名称外，标准的 HTML 及 SVG 标签名也不能作为组件名。
+- 在百度小程序中使用时，不要在 data 内使用 hidden ，可能会导致渲染错误
+- `methods`中不可使用与生命周期同名的方法名
 
 
 ## 常见问题
@@ -679,7 +678,7 @@ export default {
 |vm.$children		|支持	|支持			|支持		|支持			|-																																					|
 |vm.$slots			|支持	|支持			|不支持	|支持			|App端旧版获取值为`{'slotName':true/false}`比如：`{"footer":true}`					|
 |vm.$scopedSlots|支持	|支持			|支持		|支持			|App端旧版获取值为`{'slotName':true/false}`比如：`{"footer":true}`					|
-|vm.$refs				|支持	|支持			|支持		|支持			|-																																					|
+|vm.$refs				|支持	|支持			|支持		|支持			|非H5端只能用于获取自定义组件，不能用于获取内置组件实例（如：view、text）|
 |vm.$isServer		|支持	|不支持		|支持		|不支持		|App端V3总是返回false																												|
 |vm.$attrs			|支持	|不支持		|支持		|不支持		|-																																					|
 |vm.$listeners	|支持	|不支持		|支持		|不支持		|-																																					|

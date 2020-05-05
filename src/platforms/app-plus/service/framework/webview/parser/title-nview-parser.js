@@ -38,6 +38,9 @@ export function parseTitleNView (routeOptions) {
     (
       windowOptions.navigationStyle === 'custom' &&
       !isPlainObject(titleNView)
+    ) || (
+      windowOptions.transparentTitle === 'always' &&
+      !isPlainObject(titleNView)
     )
   ) {
     return false
@@ -46,9 +49,9 @@ export function parseTitleNView (routeOptions) {
   const titleImage = windowOptions.titleImage || ''
   const transparentTitle = windowOptions.transparentTitle || 'none'
   const titleNViewTypeList = {
-    'none': 'default',
-    'auto': 'transparent',
-    'always': 'float'
+    none: 'default',
+    auto: 'transparent',
+    always: 'float'
   }
 
   const ret = {
@@ -56,15 +59,15 @@ export function parseTitleNView (routeOptions) {
     titleText: titleImage === '' ? windowOptions.navigationBarTitleText || '' : '',
     titleColor: windowOptions.navigationBarTextStyle === 'black' ? '#000000' : '#ffffff',
     type: titleNViewTypeList[transparentTitle],
-    backgroundColor: transparentTitle !== 'always' ? windowOptions.navigationBarBackgroundColor || '#000000' : 'rgba(0,0,0,0)',
+    backgroundColor: windowOptions.navigationBarBackgroundColor || '#f8f8f8',
     tags: titleImage === '' ? [] : [{
-      'tag': 'img',
-      'src': titleImage,
-      'position': {
-        'left': 'auto',
-        'top': 'auto',
-        'width': 'auto',
-        'height': '26px'
+      tag: 'img',
+      src: titleImage,
+      position: {
+        left: 'auto',
+        top: 'auto',
+        width: 'auto',
+        height: '26px'
       }
     }]
   }

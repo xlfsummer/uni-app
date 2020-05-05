@@ -2,17 +2,19 @@
   <uni-page-head :uni-page-head-type="type">
     <div
       :style="{transitionDuration:duration,transitionTimingFunction:timingFunc,backgroundColor:bgColor,color:textColor}"
-      :class="{'uni-page-head-transparent':type==='transparent','uni-page-head-titlePenetrate': titlePenetrate}"
+      :class="headClass"
       class="uni-page-head"
     >
       <div class="uni-page-head-hd">
         <div
           v-show="backButton"
           class="uni-page-head-btn"
-          @click="_back">
+          @click="_back"
+        >
           <i
             :style="{color:color,fontSize:'27px'}"
-            class="uni-btn-icon">&#xe601;</i>
+            class="uni-btn-icon"
+          >&#xe601;</i>
         </div>
         <template v-for="(btn,index) in btns">
           <div
@@ -34,19 +36,24 @@
       </div>
       <div
         v-if="!searchInput"
-        class="uni-page-head-bd">
+        class="uni-page-head-bd"
+      >
         <div
           :style="{fontSize:titleSize,opacity:type==='transparent'?0:1}"
           class="uni-page-head__title"
         >
           <i
             v-if="loading"
-            class="uni-loading" />
+            class="uni-loading"
+          />
           <img
             v-if="titleImage!==''"
             :src="titleImage"
-            class="uni-page-head__title_image" >
-          <template v-else>{{ titleText }}</template>
+            class="uni-page-head__title_image"
+          >
+          <template v-else>
+            {{ titleText }}
+          </template>
         </div>
       </div>
       <div
@@ -58,7 +65,9 @@
           :style="{color:searchInput.placeholderColor}"
           :class="[`uni-page-head-search-placeholder-${focus || text ? 'left' : searchInput.align}`]"
           class="uni-page-head-search-placeholder"
-        >{{ text || composing ? '' : searchInput.placeholder }}</div>
+        >
+          {{ text || composing ? '' : searchInput.placeholder }}
+        </div>
         <v-uni-input
           ref="input"
           v-model="text"
@@ -302,6 +311,44 @@ uni-page-head .uni-page-head__title .uni-page-head__title_image {
   height: 26px;
   vertical-align: middle;
 }
+
+uni-page-head .uni-page-head-shadow {
+  overflow: visible;
+}
+
+uni-page-head .uni-page-head-shadow::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 5px;
+  background-size: 100% 100%;
+}
+
+uni-page-head .uni-page-head-shadow-grey::after {
+  background-image: url("https://cdn.dcloud.net.cn/img/shadow-grey.png");
+}
+
+uni-page-head .uni-page-head-shadow-blue::after {
+  background-image: url("https://cdn.dcloud.net.cn/img/shadow-blue.png");
+}
+
+uni-page-head .uni-page-head-shadow-green::after {
+  background-image: url("https://cdn.dcloud.net.cn/img/shadow-green.png");
+}
+
+uni-page-head .uni-page-head-shadow-orange::after {
+  background-image: url("https://cdn.dcloud.net.cn/img/shadow-orange.png");
+}
+
+uni-page-head .uni-page-head-shadow-red::after {
+  background-image: url("https://cdn.dcloud.net.cn/img/shadow-red.png");
+}
+
+uni-page-head .uni-page-head-shadow-yellow::after {
+  background-image: url("https://cdn.dcloud.net.cn/img/shadow-yellow.png");
+}
 </style>
 <script>
 import appendCss from 'uni-platform/helpers/append-css'
@@ -385,6 +432,12 @@ export default {
     titlePenetrate: {
       type: Boolean,
       default: false
+    },
+    shadow: {
+      type: Object,
+      default () {
+        return {}
+      }
     }
   },
   data () {
@@ -400,9 +453,9 @@ export default {
       const fonts = {}
       if (this.buttons.length) {
         this.buttons.forEach(button => {
-          let btn = Object.assign({}, button)
+          const btn = Object.assign({}, button)
           if (btn.fontSrc && !btn.fontFamily) {
-            let fontSrc = btn.fontSrc = getRealPath(btn.fontSrc)
+            const fontSrc = btn.fontSrc = getRealPath(btn.fontSrc)
             let fontFamily
             if (fontSrc in fonts) {
               fontFamily = fonts[fontSrc]
@@ -425,6 +478,18 @@ export default {
         })
       }
       return btns
+    },
+    headClass () {
+      const shadowColorType = this.shadow.colorType
+      const data = {
+        'uni-page-head-transparent': this.type === 'transparent',
+        'uni-page-head-titlePenetrate': this.titlePenetrate,
+        'uni-page-head-shadow': shadowColorType
+      }
+      if (shadowColorType) {
+        data[`uni-page-head-shadow-${shadowColorType}`] = shadowColorType
+      }
+      return data
     }
   },
   mounted () {

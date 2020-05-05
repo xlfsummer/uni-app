@@ -1,5 +1,4 @@
 export function createServiceContext(Vue, weex, plus, UniServiceJSBridge,instanceContext){
-var localStorage = plus.storage
 var setTimeout = instanceContext.setTimeout
 var clearTimeout = instanceContext.clearTimeout
 var setInterval = instanceContext.setInterval
@@ -127,7 +126,8 @@ var serviceContext = (function () {
     'stopBeaconDiscovery',
     'checkIsSupportSoterAuthentication',
     'checkIsSoterEnrolledInDevice',
-    'startSoterAuthentication'
+    'startSoterAuthentication',
+    'onUIStyleChange'
   ];
 
   const keyboard = [
@@ -165,7 +165,8 @@ var serviceContext = (function () {
     'startPullDownRefresh',
     'stopPullDownRefresh',
     'createSelectorQuery',
-    'createIntersectionObserver'
+    'createIntersectionObserver',
+    'getMenuButtonBoundingClientRect'
   ];
 
   const event = [
@@ -212,7 +213,9 @@ var serviceContext = (function () {
     'restoreGlobal',
     'getSubNVueById',
     'getCurrentSubNVue',
-    'setPageMeta'
+    'setPageMeta',
+    'onNativeEventReceive',
+    'sendNativeEvent'
   ];
 
   const ad = [
@@ -308,6 +311,45 @@ var serviceContext = (function () {
     }
   }
 
+  /**
+   * Check if two values are loosely equal - that is,
+   * if they are plain objects, do they have the same shape?
+   */
+  function looseEqual (a, b) {
+    if (a === b) return true
+    const isObjectA = isObject(a);
+    const isObjectB = isObject(b);
+    if (isObjectA && isObjectB) {
+      try {
+        const isArrayA = Array.isArray(a);
+        const isArrayB = Array.isArray(b);
+        if (isArrayA && isArrayB) {
+          return a.length === b.length && a.every((e, i) => {
+            return looseEqual(e, b[i])
+          })
+        } else if (a instanceof Date && b instanceof Date) {
+          return a.getTime() === b.getTime()
+        } else if (!isArrayA && !isArrayB) {
+          const keysA = Object.keys(a);
+          const keysB = Object.keys(b);
+          return keysA.length === keysB.length && keysA.every(key => {
+            return looseEqual(a[key], b[key])
+          })
+        } else {
+          /* istanbul ignore next */
+          return false
+        }
+      } catch (e) {
+        /* istanbul ignore next */
+        return false
+      }
+    } else if (!isObjectA && !isObjectB) {
+      return String(a) === String(b)
+    } else {
+      return false
+    }
+  }
+
   const encodeReserveRE = /[!'()*]/g;
   const encodeReserveReplacer = c => '%' + c.charCodeAt(0).toString(16);
   const commaRE = /%2C/g;
@@ -393,9 +435,10 @@ var serviceContext = (function () {
         complete: options.complete
       };
       const data = Object.assign({}, options);
-      delete data.success;
-      delete data.fail;
-      delete data.complete;
+      // TODO 下版重构 nvue h5 callback
+      // delete data.success
+      // delete data.fail
+      // delete data.complete
       const res = fn.bind(this)(data, callbackId);
       if (res) {
         invoke(callbackId, res);
@@ -638,19 +681,25 @@ var serviceContext = (function () {
   };
 
   const SYNC_API_RE =
-    /^\$|restoreGlobal|getCurrentSubNVue|getMenuButtonBoundingClientRect|^report|interceptors|Interceptor$|getSubNVueById|requireNativePlugin|upx2px|hideKeyboard|canIUse|^create|Sync$|Manager$|base64ToArrayBuffer|arrayBufferToBase64/;
+    /^\$|sendNativeEvent|restoreGlobal|getCurrentSubNVue|getMenuButtonBoundingClientRect|^report|interceptors|Interceptor$|getSubNVueById|requireNativePlugin|upx2px|hideKeyboard|canIUse|^create|Sync$|Manager$|base64ToArrayBuffer|arrayBufferToBase64/;
 
   const CONTEXT_API_RE = /^create|Manager$/;
 
+  // Context例外情况
+  const CONTEXT_API_RE_EXC = ['createBLEConnection'];
+
   const TASK_APIS = ['request', 'downloadFile', 'uploadFile', 'connectSocket'];
 
-  const CALLBACK_API_RE = /^on/;
+  // 同步例外情况
+  const ASYNC_API = ['createBLEConnection'];
+
+  const CALLBACK_API_RE = /^on|^off/;
 
   function isContextApi (name) {
-    return CONTEXT_API_RE.test(name)
+    return CONTEXT_API_RE.test(name) && CONTEXT_API_RE_EXC.indexOf(name) === -1
   }
   function isSyncApi (name) {
-    return SYNC_API_RE.test(name)
+    return SYNC_API_RE.test(name) && ASYNC_API.indexOf(name) === -1
   }
 
   function isCallbackApi (name) {
@@ -679,6 +728,19 @@ var serviceContext = (function () {
     return true
   }
 
+  /* eslint-disable no-extend-native */
+  if (!Promise.prototype.finally) {
+    Promise.prototype.finally = function (callback) {
+      const promise = this.constructor;
+      return this.then(
+        value => promise.resolve(callback()).then(() => value),
+        reason => promise.resolve(callback()).then(() => {
+          throw reason
+        })
+      )
+    };
+  }
+
   function promisify (name, api) {
     if (!shouldPromise(name)) {
       return api
@@ -692,18 +754,6 @@ var serviceContext = (function () {
           success: resolve,
           fail: reject
         }), ...params);
-        /* eslint-disable no-extend-native */
-        if (!Promise.prototype.finally) {
-          Promise.prototype.finally = function (callback) {
-            const promise = this.constructor;
-            return this.then(
-              value => promise.resolve(callback()).then(() => value),
-              reason => promise.resolve(callback()).then(() => {
-                throw reason
-              })
-            )
-          };
-        }
       })))
     }
   }
@@ -860,9 +910,10 @@ var serviceContext = (function () {
     }
   };
 
-  const fileType = {
+  const fileTypes = {
     PNG: 'png',
-    JPG: 'jpeg'
+    JPG: 'jpg',
+    JPEG: 'jpg'
   };
 
   const canvasToTempFilePath = {
@@ -900,7 +951,7 @@ var serviceContext = (function () {
       type: String,
       validator (value, params) {
         value = (value || '').toUpperCase();
-        params.fileType = value in fileType ? fileType[value] : fileType.PNG;
+        params.fileType = value in fileTypes ? fileTypes[value] : fileTypes.PNG;
       }
     },
     quality: {
@@ -962,12 +1013,12 @@ var serviceContext = (function () {
   });
 
   const makePhoneCall = {
-    'phoneNumber': {
+    phoneNumber: {
       type: String,
       required: true,
       validator (phoneNumber) {
         if (!phoneNumber) {
-          return `makePhoneCall:fail parameter error: parameter.phoneNumber should not be empty String;`
+          return 'makePhoneCall:fail parameter error: parameter.phoneNumber should not be empty String;'
         }
       }
     }
@@ -1077,7 +1128,7 @@ var serviceContext = (function () {
   const SOURCE_TYPES = ['album', 'camera'];
 
   const chooseImage = {
-    'count': {
+    count: {
       type: Number,
       required: false,
       default: 9,
@@ -1087,7 +1138,7 @@ var serviceContext = (function () {
         }
       }
     },
-    'sizeType': {
+    sizeType: {
       type: [Array, String],
       required: false,
       default: SIZE_TYPES,
@@ -1110,7 +1161,7 @@ var serviceContext = (function () {
         }
       }
     },
-    'sourceType': {
+    sourceType: {
       type: Array,
       required: false,
       default: SOURCE_TYPES,
@@ -1138,7 +1189,7 @@ var serviceContext = (function () {
   const SOURCE_TYPES$1 = ['album', 'camera'];
 
   const chooseVideo = {
-    'sourceType': {
+    sourceType: {
       type: Array,
       required: false,
       default: SOURCE_TYPES$1,
@@ -1242,7 +1293,7 @@ var serviceContext = (function () {
   }
 
   const getImageInfo = {
-    'src': {
+    src: {
       type: String,
       required: true,
       validator (src, params) {
@@ -1342,13 +1393,15 @@ var serviceContext = (function () {
       item = item.split('=');
       query[item[0]] = item[1];
     });
-    for (let key in data) {
-      if (data.hasOwnProperty(key)) {
-        if (isPlainObject(data[key])) {
-          query[encode$1(key)] = encode$1(JSON.stringify(data[key]));
-        } else {
-          query[encode$1(key)] = encode$1(data[key]);
+    for (const key in data) {
+      if (hasOwn(data, key)) {
+        let v = data[key];
+        if (typeof v === 'undefined' || v === null) {
+          v = '';
+        } else if (isPlainObject(v)) {
+          v = JSON.stringify(v);
         }
+        query[encode$1(key)] = encode$1(v);
       }
     }
     query = Object.keys(query).map(item => `${item}=${query[item]}`).join('&');
@@ -1364,7 +1417,7 @@ var serviceContext = (function () {
       }
     },
     data: {
-      type: [Object, String, ArrayBuffer],
+      type: [Object, String, Array, ArrayBuffer],
       validator (value, params) {
         params.data = value || '';
       }
@@ -1405,6 +1458,9 @@ var serviceContext = (function () {
         value = (value || '').toLowerCase();
         params.responseType = Object.values(responseType).indexOf(value) < 0 ? responseType.TEXT : value;
       }
+    },
+    withCredentials: {
+      type: Boolean
     }
   };
 
@@ -1442,8 +1498,12 @@ var serviceContext = (function () {
       }
     },
     protocols: {
-      type: Array,
+      // 微信文档虽然写的是数组，但是可以正常传递字符串
+      type: [Array, String],
       validator (value, params) {
+        if (typeof value === 'string') {
+          value = [value];
+        }
         params.protocols = (value || []).filter(str => typeof str === 'string');
       }
     }
@@ -1688,7 +1748,7 @@ var serviceContext = (function () {
   });
 
   const getStorage = {
-    'key': {
+    key: {
       type: String,
       required: true
     }
@@ -1701,11 +1761,11 @@ var serviceContext = (function () {
   }];
 
   const setStorage = {
-    'key': {
+    key: {
       type: String,
       required: true
     },
-    'data': {
+    data: {
       required: true
     }
   };
@@ -1766,7 +1826,7 @@ var serviceContext = (function () {
 
   const FRONT_COLORS = ['#ffffff', '#000000'];
   const setNavigationBarColor = {
-    'frontColor': {
+    frontColor: {
       type: String,
       required: true,
       validator (frontColor, params) {
@@ -1775,11 +1835,11 @@ var serviceContext = (function () {
         }
       }
     },
-    'backgroundColor': {
+    backgroundColor: {
       type: String,
       required: true
     },
-    'animation': {
+    animation: {
       type: Object,
       default () {
         return {
@@ -1796,7 +1856,7 @@ var serviceContext = (function () {
     }
   };
   const setNavigationBarTitle = {
-    'title': {
+    title: {
       type: String,
       required: true
     }
@@ -1937,6 +1997,9 @@ var serviceContext = (function () {
     visible: {
       type: Boolean,
       default: true
+    },
+    popover: {
+      type: Object
     }
   };
 
@@ -2098,7 +2161,7 @@ var serviceContext = (function () {
     }
     if (value === undefined) {
       if (hasOwn(paramOptions, 'default')) {
-        const paramDefault = paramOptions['default'];
+        const paramDefault = paramOptions.default;
         value = isFn(paramDefault) ? paramDefault() : paramDefault;
         paramsData[key] = value; // 默认值
       }
@@ -2160,12 +2223,15 @@ var serviceContext = (function () {
       if (!valid && t === 'object') {
         valid = value instanceof type;
       }
+    } else if (value.byteLength >= 0) {
+      valid = true;
     } else if (expectedType === 'Object') {
       valid = isPlainObject(value);
     } else if (expectedType === 'Array') {
       valid = Array.isArray(value);
     } else {
-      valid = value instanceof type;
+      // TODO 页面传入的ArrayBuffer使用instanceof ArrayBuffer返回false，暂做此修改
+      valid = value instanceof type || toRawType(value) === getType(type);
     }
     return {
       valid,
@@ -2302,8 +2368,8 @@ var serviceContext = (function () {
     const callbackId = invokeCallbackId++;
     const invokeCallbackName = 'api.' + apiName + '.' + callbackId;
 
-    const invokeCallback = function (res) {
-      callback(res);
+    const invokeCallback = function (res, extras) {
+      callback(res, extras);
     };
 
     invokeCallbacks[callbackId] = {
@@ -2323,7 +2389,7 @@ var serviceContext = (function () {
     params = Object.assign({}, params);
 
     const apiCallbacks = {};
-    for (let name in params) {
+    for (const name in params) {
       const param = params[name];
       if (isFn(param)) {
         apiCallbacks[name] = tryCatch(param);
@@ -2350,7 +2416,7 @@ var serviceContext = (function () {
     }
 
     const wrapperCallbacks = {};
-    for (let name in extras) {
+    for (const name in extras) {
       const extra = extras[name];
       if (isFn(extra)) {
         wrapperCallbacks[name] = tryCatchFramework(extra);
@@ -2380,7 +2446,7 @@ var serviceContext = (function () {
         res.errMsg = apiName + ':cancel';
       } else if (res.errMsg.indexOf(':fail') !== -1) {
         let errDetail = '';
-        let spaceIndex = res.errMsg.indexOf(' ');
+        const spaceIndex = res.errMsg.indexOf(' ');
         if (spaceIndex > -1) {
           errDetail = res.errMsg.substr(spaceIndex);
         }
@@ -2447,15 +2513,15 @@ var serviceContext = (function () {
       callbackId
     }
   }
-
-  function invokeCallbackHandler (invokeCallbackId, res) {
+  // onNativeEventReceive((event,data)=>{}) 需要两个参数，写死最多两个参数，避免改动太大，影响已有逻辑
+  function invokeCallbackHandler (invokeCallbackId, res, extras) {
     if (typeof invokeCallbackId === 'number') {
       const invokeCallback = invokeCallbacks[invokeCallbackId];
       if (invokeCallback) {
         if (!invokeCallback.keepAlive) {
           delete invokeCallbacks[invokeCallbackId];
         }
-        return invokeCallback.callback(res)
+        return invokeCallback.callback(res, extras)
       }
     }
     return res
@@ -2754,7 +2820,7 @@ var serviceContext = (function () {
       return
     }
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[uni-app] setStatusBarStyle`, statusBarStyle);
+      console.log('[uni-app] setStatusBarStyle', statusBarStyle);
     }
 
     lastStatusBarStyle = statusBarStyle;
@@ -2824,18 +2890,18 @@ var serviceContext = (function () {
     if (t.indexOf('./') === 0) return getRealRoute$1(e, t.substr(2))
     let n;
     let i;
-    let o = t.split('/');
+    const o = t.split('/');
     for (n = 0, i = o.length; n < i && o[n] === '..'; n++);
     o.splice(0, n);
     t = o.join('/');
-    let r = e.length > 0 ? e.split('/') : [];
+    const r = e.length > 0 ? e.split('/') : [];
     r.splice(r.length - n - 1, n + 1);
     return r.concat(o).join('/')
   };
 
   // 处理 Android 平台解压与非解压模式下获取的路径不一致的情况
   const _handleLocalPath = filePath => {
-    let localUrl = plus.io.convertLocalFileSystemURL(filePath);
+    const localUrl = plus.io.convertLocalFileSystemURL(filePath);
     return localUrl.replace(/^\/?apps\//, '/android_asset/apps/').replace(/\/$/, '')
   };
 
@@ -2953,19 +3019,14 @@ var serviceContext = (function () {
   }
 
   function getScreenInfo () {
-    const orientation = plus.navigator.getOrientation();
-    const landscape = Math.abs(orientation) === 90;
-    // 安卓 plus 接口获取的屏幕大小值不为整数
-    const width = plus.screen.resolutionWidth;
-    const height = plus.screen.resolutionHeight;
-    // 根据方向纠正宽高
+    const { resolutionWidth, resolutionHeight } = plus.screen.getCurrentSize();
     return {
-      screenWidth: Math[landscape ? 'max' : 'min'](width, height),
-      screenHeight: Math[landscape ? 'min' : 'max'](width, height)
+      screenWidth: Math.round(resolutionWidth),
+      screenHeight: Math.round(resolutionHeight)
     }
   }
 
-  let audios = {};
+  const audios = {};
 
   const evts = ['play', 'canplay', 'ended', 'stop', 'waiting', 'seeking', 'seeked', 'pause'];
 
@@ -3041,7 +3102,7 @@ var serviceContext = (function () {
   }) {
     const audio = audios[audioId];
     if (audio) {
-      let style = {
+      const style = {
         loop,
         autoplay
       };
@@ -3071,7 +3132,7 @@ var serviceContext = (function () {
         errMsg: 'getAudioState:fail'
       }
     }
-    let {
+    const {
       src,
       startTime,
       volume
@@ -3081,7 +3142,7 @@ var serviceContext = (function () {
       errMsg: 'getAudioState:ok',
       duration: 1e3 * (audio.getDuration() || 0),
       currentTime: audio.isStopped ? 0 : 1e3 * audio.getPosition(),
-      paused: audio.isPaused,
+      paused: audio.isPaused(),
       src,
       volume,
       startTime: 1e3 * startTime,
@@ -3097,7 +3158,7 @@ var serviceContext = (function () {
     const audio = audios[audioId];
     const operationTypes = ['play', 'pause', 'stop'];
     if (operationTypes.indexOf(operationType) >= 0) {
-      audio[operationType === operationTypes[0] && audio.isPaused ? 'resume' : operationType]();
+      audio[operationType === operationTypes[0] && audio.isPaused() ? 'resume' : operationType]();
     } else if (operationType === 'seek') {
       audio.seekTo(currentTime / 1e3);
     }
@@ -3213,14 +3274,14 @@ var serviceContext = (function () {
         dataUrl: audio.src,
         duration: audio.getDuration() || 0,
         currentPosition: audio.getPosition(),
-        status: audio.isPaused ? 0 : 1,
+        status: audio.isPaused() ? 0 : 1,
         downloadPercent: Math.round(100 * audio.getBuffered() / audio.getDuration()),
-        errMsg: `getMusicPlayerState:ok`
+        errMsg: 'getMusicPlayerState:ok'
       }
     }
     return {
       status: 2,
-      errMsg: `getMusicPlayerState:ok`
+      errMsg: 'getMusicPlayerState:ok'
     }
   }
   function operateMusicPlayer ({
@@ -3253,7 +3314,7 @@ var serviceContext = (function () {
   function setBackgroundAudioState (args) {
     setMusicState(args);
     return {
-      errMsg: `setBackgroundAudioState:ok`
+      errMsg: 'setBackgroundAudioState:ok'
     }
   }
   function operateBackgroundAudio ({
@@ -3282,14 +3343,14 @@ var serviceContext = (function () {
       coverImgUrl: '',
       webUrl: '',
       startTime: 0,
-      errMsg: `getBackgroundAudioState:ok`
+      errMsg: 'getBackgroundAudioState:ok'
     };
     const audio = getAudio();
     if (audio) {
-      let newData = {
+      const newData = {
         duration: audio.getDuration() || 0,
         currentTime: audio.isStopped ? 0 : audio.getPosition(),
-        paused: audio.isPaused,
+        paused: audio.isPaused(),
         src: audio.src,
         buffered: audio.getBuffered(),
         title: audio.title,
@@ -3447,7 +3508,7 @@ var serviceContext = (function () {
     if (!id || !elm) {
       return
     }
-    if (elm.attr.id === id) {
+    if (elm.attr && elm.attr.id === id) {
       return elm
     }
     const children = elm.children;
@@ -3498,7 +3559,7 @@ var serviceContext = (function () {
       isFn(callback) && callback(ret);
 
       if (type === SUCCESS || type === FAIL) {
-        const complete = callbacks['complete'];
+        const complete = callbacks.complete;
         isFn(complete) && complete(ret);
       }
     }
@@ -3973,20 +4034,9 @@ var serviceContext = (function () {
     return true
   }
 
-  function checkDevices (data) {
-    data.devices = data.devices.map(device => {
-      var advertisData = device.advertisData;
-      if (advertisData && typeof advertisData !== 'string') {
-        device.advertisData = arrayBufferToBase64$2(advertisData);
-      }
-      return device
-    });
-  }
-
   var onBluetoothAdapterStateChange;
   var onBluetoothDeviceFound;
   var onBLEConnectionStateChange;
-  var onBLEConnectionStateChanged;
   var onBLECharacteristicValueChange;
 
   function openBluetoothAdapter (data, callbackId) {
@@ -4003,7 +4053,7 @@ var serviceContext = (function () {
   }
 
   function startBluetoothDevicesDiscovery (data, callbackId) {
-    onBluetoothDeviceFound = onBluetoothDeviceFound || bluetoothOn('onBluetoothDeviceFound', checkDevices);
+    onBluetoothDeviceFound = onBluetoothDeviceFound || bluetoothOn('onBluetoothDeviceFound');
     bluetoothExec('startBluetoothDevicesDiscovery', callbackId, data);
   }
 
@@ -4012,7 +4062,7 @@ var serviceContext = (function () {
   }
 
   function getBluetoothDevices (data, callbackId) {
-    bluetoothExec('getBluetoothDevices', callbackId, {}, checkDevices);
+    bluetoothExec('getBluetoothDevices', callbackId, {});
   }
 
   function getConnectedBluetoothDevices (data, callbackId) {
@@ -4021,7 +4071,6 @@ var serviceContext = (function () {
 
   function createBLEConnection (data, callbackId) {
     onBLEConnectionStateChange = onBLEConnectionStateChange || bluetoothOn('onBLEConnectionStateChange');
-    onBLEConnectionStateChanged = onBLEConnectionStateChanged || bluetoothOn('onBLEConnectionStateChanged');
     bluetoothExec('createBLEConnection', callbackId, data);
   }
 
@@ -4038,27 +4087,21 @@ var serviceContext = (function () {
   }
 
   function notifyBLECharacteristicValueChange (data, callbackId) {
-    onBLECharacteristicValueChange = onBLECharacteristicValueChange || bluetoothOn('onBLECharacteristicValueChange',
-      data => {
-        data.value = arrayBufferToBase64$2(data.value);
-      });
+    onBLECharacteristicValueChange = onBLECharacteristicValueChange || bluetoothOn('onBLECharacteristicValueChange');
     bluetoothExec('notifyBLECharacteristicValueChange', callbackId, data);
   }
 
   function notifyBLECharacteristicValueChanged (data, callbackId) {
-    onBLECharacteristicValueChange = onBLECharacteristicValueChange || bluetoothOn('onBLECharacteristicValueChange',
-      data => {
-        data.value = arrayBufferToBase64$2(data.value);
-      });
+    onBLECharacteristicValueChange = onBLECharacteristicValueChange || bluetoothOn('onBLECharacteristicValueChange');
     bluetoothExec('notifyBLECharacteristicValueChanged', callbackId, data);
   }
 
   function readBLECharacteristicValue (data, callbackId) {
+    onBLECharacteristicValueChange = onBLECharacteristicValueChange || bluetoothOn('onBLECharacteristicValueChange');
     bluetoothExec('readBLECharacteristicValue', callbackId, data);
   }
 
   function writeBLECharacteristicValue (data, callbackId) {
-    data.value = base64ToArrayBuffer$2(data.value);
     bluetoothExec('writeBLECharacteristicValue', callbackId, data);
   }
 
@@ -4316,12 +4359,12 @@ var serviceContext = (function () {
   }, callbackId) {
     const barcode = plus.barcode;
     const SCAN_TYPES = {
-      'qrCode': [
+      qrCode: [
         barcode.QR,
         barcode.AZTEC,
         barcode.MAXICODE
       ],
-      'barCode': [
+      barCode: [
         barcode.EAN13,
         barcode.EAN8,
         barcode.UPCA,
@@ -4334,8 +4377,8 @@ var serviceContext = (function () {
         barcode.RSS14,
         barcode.RSSEXPANDED
       ],
-      'datamatrix': [barcode.DATAMATRIX],
-      'pdf417': [barcode.PDF417]
+      datamatrix: [barcode.DATAMATRIX],
+      pdf417: [barcode.PDF417]
     };
 
     const SCAN_MAPS = {
@@ -4371,8 +4414,8 @@ var serviceContext = (function () {
       });
     }
     if (!filters.length) {
-      filters = filters.concat(SCAN_TYPES['qrCode']).concat(SCAN_TYPES['barCode']).concat(SCAN_TYPES['datamatrix']).concat(
-        SCAN_TYPES['pdf417']);
+      filters = filters.concat(SCAN_TYPES.qrCode).concat(SCAN_TYPES.barCode).concat(SCAN_TYPES.datamatrix).concat(
+        SCAN_TYPES.pdf417);
     }
 
     const buttons = [];
@@ -4525,6 +4568,7 @@ var serviceContext = (function () {
     constructor (webview) {
       this.webview = webview;
     }
+
     sendMessage (data) {
       const message = {
         __message: {
@@ -4539,6 +4583,7 @@ var serviceContext = (function () {
         plus_.webview.postMessageToUniNView(message, id);
       }
     }
+
     close () {
       this.webview.close();
     }
@@ -4705,7 +4750,7 @@ var serviceContext = (function () {
   }
 
   function checkIsSupportSoterAuthentication () {
-    let supportMode = [];
+    const supportMode = [];
     if (checkIsSupportFingerPrint()) {
       supportMode.push('fingerPrint');
     }
@@ -4784,7 +4829,7 @@ var serviceContext = (function () {
         errMsg: 'startSoterAuthentication:fail'
       }
     }
-    let supportRequestAuthMode = [];
+    const supportRequestAuthMode = [];
     requestAuthModes.map((item, index) => {
       if (supportMode.indexOf(item) > -1) {
         supportRequestAuthMode.push(item);
@@ -4797,7 +4842,7 @@ var serviceContext = (function () {
         errMsg: 'startSoterAuthentication:fail no corresponding mode'
       }
     }
-    let enrolledRequestAuthMode = [];
+    const enrolledRequestAuthMode = [];
     supportRequestAuthMode.map((item, index) => {
       const checked = checkIsSoterEnrolledInDevice({
         checkAuthMode: item
@@ -4913,16 +4958,6 @@ var serviceContext = (function () {
     }
   }
 
-  var safeAreaInsets = {
-    get bottom () {
-      if (plus.os.name === 'iOS') {
-        const safeArea = plus.navigator.getSafeAreaInsets();
-        return safeArea ? safeArea.bottom : 0
-      }
-      return 0
-    }
-  };
-
   const TABBAR_HEIGHT = 50;
   const isIOS$1 = plus.os.name === 'iOS';
   let config;
@@ -5008,7 +5043,7 @@ var serviceContext = (function () {
     });
   }
 
-  let maskClickCallback = [];
+  const maskClickCallback = [];
 
   var tabBar$1 = {
     id: '0',
@@ -5078,7 +5113,7 @@ var serviceContext = (function () {
       return visible
     },
     get height () {
-      return (config && config.height ? parseFloat(config.height) : TABBAR_HEIGHT) + safeAreaInsets.bottom
+      return (config && config.height ? parseFloat(config.height) : TABBAR_HEIGHT) + plus.navigator.getSafeAreaInsets().deviceBottom
     },
     // tabBar是否遮挡内容区域
     get cover () {
@@ -5095,7 +5130,7 @@ var serviceContext = (function () {
       maskClickCallback.push(callback);
     },
     removeEventListener (name, callback) {
-      let callbackIndex = maskClickCallback.indexOf(callback);
+      const callbackIndex = maskClickCallback.indexOf(callback);
       maskClickCallback.splice(callbackIndex, 1);
     }
   };
@@ -5140,9 +5175,13 @@ var serviceContext = (function () {
     }
     const windowTop = titleNView.cover ? titleNView.height : 0;
     const windowBottom = tabBarView.cover ? tabBarView.height : 0;
-    const windowHeight = screenHeight - titleNView.height - tabBarView.height;
-    const windowHeightReal = screenHeight - (titleNView.cover ? 0 : titleNView.height) - (tabBarView.cover ? 0 : tabBarView.height);
+    let windowHeight = screenHeight - titleNView.height - tabBarView.height;
+    let windowHeightReal = screenHeight - (titleNView.cover ? 0 : titleNView.height) - (tabBarView.cover ? 0 : tabBarView.height);
     const windowWidth = screenWidth;
+    if ((!tabBarView.height || tabBarView.cover) && !safeAreaInsets.bottom && safeAreaInsets.deviceBottom) {
+      windowHeight -= safeAreaInsets.deviceBottom;
+      windowHeightReal -= safeAreaInsets.deviceBottom;
+    }
     safeAreaInsets = ios ? safeAreaInsets : {
       left: 0,
       right: 0,
@@ -5436,7 +5475,7 @@ var serviceContext = (function () {
       });
     }
     let index = 0;
-    let onShow = function () {
+    const onShow = function () {
       index++;
       if (index === 2) {
         webview.evalJS(`__chooseLocation__(${JSON.stringify(params)})`);
@@ -5661,14 +5700,21 @@ var serviceContext = (function () {
     openLocation: openLocation$1
   });
 
-  function openLocation$2 (data) {
+  function openLocation$2 (data, callbackId) {
     showPage({
       url: '__uniappopenlocation',
       data,
       style: {
         titleNView: {
           type: 'transparent'
-        }
+        },
+        popGesture: 'close',
+        backButtonAutoControl: 'close'
+      },
+      onClose () {
+        invoke$1(callbackId, {
+          errMsg: 'openLocation:fail cancel'
+        });
       }
     });
     return {
@@ -5877,7 +5923,8 @@ var serviceContext = (function () {
     const camera = plus.camera.getCamera();
     camera.captureImage(e => invokeChooseImage(callbackId, 'ok', sizeType, [e]),
       e => invokeChooseImage(callbackId, 'fail', 1), {
-        filename: TEMP_PATH + '/camera/'
+        filename: TEMP_PATH + '/camera/',
+        resolution: 'high'
       });
   };
   const openAlbum = function (callbackId, sizeType, count) {
@@ -5934,7 +5981,7 @@ var serviceContext = (function () {
   }
 
   const invokeChooseVideo = function (callbackId, type, tempFilePath = '') {
-    let callbackResult = {
+    const callbackResult = {
       errMsg: `chooseVideo:${type}`,
       tempFilePath: tempFilePath,
       duration: 0,
@@ -5989,7 +6036,7 @@ var serviceContext = (function () {
     camera = 'back'
   } = {}, callbackId) {
     let fallback = true;
-    let cameraIndex = (camera === 'front') ? 2 : 1;
+    const cameraIndex = (camera === 'front') ? 2 : 1;
     if (sourceType.length === 1) {
       if (sourceType[0] === 'album') {
         fallback = false;
@@ -6034,12 +6081,12 @@ var serviceContext = (function () {
       quality
     }, () => {
       invoke$1(callbackId, {
-        errMsg: `compressImage:ok`,
+        errMsg: 'compressImage:ok',
         tempFilePath: dst
       });
     }, () => {
       invoke$1(callbackId, {
-        errMsg: `compressImage:fail`
+        errMsg: 'compressImage:fail'
       });
     });
   }
@@ -6064,7 +6111,7 @@ var serviceContext = (function () {
     });
   }
 
-  function previewImage$1 ({
+  function previewImagePlus ({
     current = 0,
     background = '#000000',
     indicator = 'number',
@@ -6091,7 +6138,7 @@ var serviceContext = (function () {
         let itemList = [];
         let itemColor = '';
         let title = '';
-        let hasLongPressActions = longPressActions && longPressActions.callbackId;
+        const hasLongPressActions = longPressActions && longPressActions.callbackId;
         if (!hasLongPressActions) {
           itemList = ['保存相册'];
           itemColor = '#000000';
@@ -6273,7 +6320,7 @@ var serviceContext = (function () {
       }
     });
     for (const name in header) {
-      if (header.hasOwnProperty(name)) {
+      if (hasOwn(header, name)) {
         downloader.setRequestHeader(name, header[name]);
       }
     }
@@ -6349,10 +6396,11 @@ var serviceContext = (function () {
         hasContentType = true;
         headers['Content-Type'] = header[name];
         // TODO 需要重构
-        if (method !== 'GET' && header[name].indexOf('application/x-www-form-urlencoded') === 0 && typeof data !== 'string' && !(data instanceof ArrayBuffer)) {
-          let bodyArray = [];
-          for (let key in data) {
-            if (data.hasOwnProperty(key)) {
+        if (method !== 'GET' && header[name].indexOf('application/x-www-form-urlencoded') === 0 && typeof data !==
+          'string' && !(data instanceof ArrayBuffer)) {
+          const bodyArray = [];
+          for (const key in data) {
+            if (hasOwn(data, key)) {
               bodyArray.push(encodeURIComponent(key) + '=' + encodeURIComponent(data[key]));
             }
           }
@@ -6377,7 +6425,7 @@ var serviceContext = (function () {
           statusCode: 0,
           errMsg: 'timeout'
         });
-      }, (timeout + 200));// TODO +200 发消息到原生层有时间开销，以后考虑由原生层回调超时
+      }, (timeout + 200)); // TODO +200 发消息到原生层有时间开销，以后考虑由原生层回调超时
     }
     const options = {
       method,
@@ -6622,12 +6670,12 @@ var serviceContext = (function () {
     });
 
     for (const name in header) {
-      if (header.hasOwnProperty(name)) {
+      if (hasOwn(header, name)) {
         uploader.setRequestHeader(name, header[name]);
       }
     }
     for (const name in formData) {
-      if (formData.hasOwnProperty(name)) {
+      if (hasOwn(formData, name)) {
         uploader.addData(name, String(formData[name]));
       }
     }
@@ -6987,27 +7035,27 @@ var serviceContext = (function () {
 
   // 0:图文，1:纯文字，2:纯图片，3:音乐，4:视频，5:小程序
   const TYPES = {
-    '0': {
+    0: {
       name: 'web',
       title: '图文'
     },
-    '1': {
+    1: {
       name: 'text',
       title: '纯文字'
     },
-    '2': {
+    2: {
       name: 'image',
       title: '纯图片'
     },
-    '3': {
+    3: {
       name: 'music',
       title: '音乐'
     },
-    '4': {
+    4: {
       name: 'video',
       title: '视频'
     },
-    '5': {
+    5: {
       name: 'miniProgram',
       title: '小程序'
     }
@@ -7034,7 +7082,7 @@ var serviceContext = (function () {
 
     const shareType = TYPES[type + ''];
     if (shareType) {
-      let sendMsg = {
+      const sendMsg = {
         provider,
         type: shareType.name,
         title,
@@ -7190,7 +7238,7 @@ var serviceContext = (function () {
     }
     plus.share.sendWithSystem({
       type,
-      pictures: imageUrl ? [imageUrl] : [],
+      pictures: imageUrl && [imageUrl],
       content,
       href
     }, function (res) {
@@ -7252,7 +7300,7 @@ var serviceContext = (function () {
       return
     }
     const maskColor = webview.__uniapp_mask;
-    let maskWebview = webview.__uniapp_mask_id === '0' ? {
+    const maskWebview = webview.__uniapp_mask_id === '0' ? {
       setStyle ({
         mask
       }) {
@@ -7295,11 +7343,39 @@ var serviceContext = (function () {
     if (webview && !webview.$processed) {
       wrapper$1(webview);
     }
+    const oldSetStyle = webview.setStyle;
+    var parentWebview = plus.webview.getWebviewById(webview.__uniapp_mask_id);
+    webview.setStyle = function (style) {
+      if (style && style.mask) {
+        parentWebview.setStyle({
+          mask: style.mask
+        });
+        delete style.mask;
+      }
+      oldSetStyle.call(this, style);
+    };
     return webview
   }
 
   function getCurrentSubNVue () {
     return getSubNVueById(plus.webview.currentWebview().id)
+  }
+
+  const callbacks$3 = [];
+  // 不使用uni-core/service/platform中的onMethod，避免循环引用
+  UniServiceJSBridge.on('api.uniMPNativeEvent', function (res) {
+    callbacks$3.forEach(callbackId => {
+      invoke$1(callbackId, res.event, res.data);
+    });
+  });
+
+  function onNativeEventReceive (callbackId) {
+    callbacks$3.push(callbackId);
+  }
+
+  function sendNativeEvent (event, data, callback) {
+    // 实时获取weex module（weex可能会变化，比如首页nvue加速显示时）
+    return weex.requireModule('plus').sendNativeEvent(event, data, callback)
   }
 
   let firstBackTime = 0;
@@ -7447,6 +7523,9 @@ var serviceContext = (function () {
       (
         windowOptions.navigationStyle === 'custom' &&
         !isPlainObject(titleNView)
+      ) || (
+        windowOptions.transparentTitle === 'always' &&
+        !isPlainObject(titleNView)
       )
     ) {
       return false
@@ -7455,9 +7534,9 @@ var serviceContext = (function () {
     const titleImage = windowOptions.titleImage || '';
     const transparentTitle = windowOptions.transparentTitle || 'none';
     const titleNViewTypeList = {
-      'none': 'default',
-      'auto': 'transparent',
-      'always': 'float'
+      none: 'default',
+      auto: 'transparent',
+      always: 'float'
     };
 
     const ret = {
@@ -7465,15 +7544,15 @@ var serviceContext = (function () {
       titleText: titleImage === '' ? windowOptions.navigationBarTitleText || '' : '',
       titleColor: windowOptions.navigationBarTextStyle === 'black' ? '#000000' : '#ffffff',
       type: titleNViewTypeList[transparentTitle],
-      backgroundColor: transparentTitle !== 'always' ? windowOptions.navigationBarBackgroundColor || '#000000' : 'rgba(0,0,0,0)',
+      backgroundColor: windowOptions.navigationBarBackgroundColor || '#f8f8f8',
       tags: titleImage === '' ? [] : [{
-        'tag': 'img',
-        'src': titleImage,
-        'position': {
-          'left': 'auto',
-          'top': 'auto',
-          'width': 'auto',
-          'height': '26px'
+        tag: 'img',
+        src: titleImage,
+        position: {
+          left: 'auto',
+          top: 'auto',
+          width: 'auto',
+          height: '26px'
         }
       }]
     };
@@ -7735,6 +7814,7 @@ var serviceContext = (function () {
         `UNIAPP[webview][${webview.id}]:create[${subNVue.id}]:${JSON.stringify(style)}`
       );
     }
+    delete style.mask;
     const subNVueWebview = plus.webview.create('', subNVue.id, style, extras);
 
     if (isPopup) {
@@ -7869,10 +7949,10 @@ var serviceContext = (function () {
   let id$1 = 2;
 
   const WEBVIEW_LISTENERS = {
-    'pullToRefresh': 'onPullDownRefresh',
-    'titleNViewSearchInputChanged': 'onNavigationBarSearchInputChanged',
-    'titleNViewSearchInputConfirmed': 'onNavigationBarSearchInputConfirmed',
-    'titleNViewSearchInputClicked': 'onNavigationBarSearchInputClicked'
+    pullToRefresh: 'onPullDownRefresh',
+    titleNViewSearchInputChanged: 'onNavigationBarSearchInputChanged',
+    titleNViewSearchInputConfirmed: 'onNavigationBarSearchInputConfirmed',
+    titleNViewSearchInputClicked: 'onNavigationBarSearchInputClicked'
   };
 
   function setPreloadWebview (webview) {
@@ -7881,6 +7961,14 @@ var serviceContext = (function () {
 
   function noop$1 (str) {
     return str
+  }
+
+  function getUniPageUrl (path, query) {
+    const queryString = query ? stringifyQuery(query, noop$1) : '';
+    return {
+      path: path.substr(1),
+      query: queryString ? queryString.substr(1) : queryString
+    }
   }
 
   function getDebugRefresh (path, query, routeOptions) {
@@ -7902,9 +7990,9 @@ var serviceContext = (function () {
         path,
         routeOptions
       );
-      webviewStyle.debugRefresh = getDebugRefresh(path, query, routeOptions);
+      webviewStyle.uniPageUrl = getUniPageUrl(path, query);
       if (process.env.NODE_ENV !== 'production') {
-        console.log(`[uni-app] createWebview`, webviewId, path, webviewStyle);
+        console.log('[uni-app] createWebview', webviewId, path, webviewStyle);
       }
       return plus.webview.create('', String(webviewId), webviewStyle, {
         nvue: true
@@ -7925,9 +8013,14 @@ var serviceContext = (function () {
         '',
         routeOptions
       );
-      webviewStyle.debugRefresh = getDebugRefresh(path, query, routeOptions);
+
+      webviewStyle.uniPageUrl = getUniPageUrl(path, query);
+
+      if (!routeOptions.meta.isNVue) {
+        webviewStyle.debugRefresh = getDebugRefresh(path, query, routeOptions);
+      }
       if (process.env.NODE_ENV !== 'production') {
-        console.log(`[uni-app] updateWebview`, webviewStyle);
+        console.log('[uni-app] updateWebview', webviewStyle);
       }
 
       webview.setStyle(webviewStyle);
@@ -7989,6 +8082,17 @@ var serviceContext = (function () {
 
   let todoNavigator = false;
 
+  function setTodoNavigator (path, callback, msg) {
+    todoNavigator = {
+      path: path,
+      nvue: __uniRoutes.find(route => route.path === path).meta.isNVue,
+      navigate: callback
+    };
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`todoNavigator:${todoNavigator.path} ${msg}`);
+    }
+  }
+
   function navigate (path, callback, isAppLaunch) {
     {
       if (isAppLaunch && __uniConfig.splashscreen && __uniConfig.splashscreen.autoclose && (!__uniConfig.splashscreen.alwaysShowBeforeRender)) {
@@ -7997,20 +8101,20 @@ var serviceContext = (function () {
       if (!isAppLaunch && todoNavigator) {
         return console.error(`已存在待跳转页面${todoNavigator.path},请不要连续多次跳转页面${path}`)
       }
+      if (__uniConfig.renderer === 'native') { // 纯原生无需wait逻辑
+        // 如果是首页还未初始化，需要等一等，其他无需等待
+        if (getCurrentPages().length === 0) {
+          return setTodoNavigator(path, callback, 'waitForReady')
+        }
+        return callback()
+      }
       // 未创建 preloadWebview 或 preloadWebview 已被使用
       const waitPreloadWebview = !preloadWebview || (preloadWebview && preloadWebview.__uniapp_route);
       // 已创建未 loaded
       const waitPreloadWebviewReady = preloadWebview && !preloadWebview.loaded;
 
       if (waitPreloadWebview || waitPreloadWebviewReady) {
-        todoNavigator = {
-          path: path,
-          nvue: __uniRoutes.find(route => route.path === path).meta.isNVue,
-          navigate: callback
-        };
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`todoNavigator:${todoNavigator.path} ${waitPreloadWebview ? 'waitForCreate' : 'waitForReady'}`);
-        }
+        setTodoNavigator(path, callback, waitPreloadWebview ? 'waitForCreate' : 'waitForReady');
       } else {
         callback();
       }
@@ -8036,6 +8140,15 @@ var serviceContext = (function () {
 
   function navigateFinish () {
     {
+      if (__uniConfig.renderer === 'native') {
+        if (!todoNavigator) {
+          return
+        }
+        if (todoNavigator.nvue) {
+          return todoNavigate()
+        }
+        return
+      }
       // 创建预加载
       const preloadWebview = createPreloadWebview();
       if (process.env.NODE_ENV !== 'production') {
@@ -8096,7 +8209,7 @@ var serviceContext = (function () {
     if (!pageFactory[pagePath]) {
       console.error(`${pagePath} not found`);
     }
-    let startTime = Date.now();
+    const startTime = Date.now();
     const pageVm = new (getPageVueComponent(pagePath))({
       mpType: 'page',
       pageId,
@@ -8158,7 +8271,7 @@ var serviceContext = (function () {
     }
 
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[uni-app] registerPage`, path, webview.id);
+      console.log(`[uni-app] registerPage(${path},${webview.id})`);
     }
 
     initWebview(webview, routeOptions, path, query);
@@ -8190,7 +8303,7 @@ var serviceContext = (function () {
             this.$vm.$destroy();
           }
           if (process.env.NODE_ENV !== 'production') {
-            console.log(`[uni-app] removePage`, path, webview.id);
+            console.log('[uni-app] removePage', path, webview.id);
           }
         }
       },
@@ -8389,9 +8502,18 @@ var serviceContext = (function () {
     const pages = getCurrentPages();
     const len = pages.length;
 
+    let callOnHide = false;
+    let callOnShow = false;
+
+    let currentPage;
     if (len >= 1) { // 前一个页面是非 tabBar 页面
-      const currentPage = pages[len - 1];
+      currentPage = pages[len - 1];
       if (!currentPage.$page.meta.isTabBar) {
+        // 前一个页面为非 tabBar 页面时，目标tabBar需要强制触发onShow
+        // 该情况下目标页tabBarPage的visible是不对的
+        // 除非每次路由跳转都处理一遍tabBarPage的visible，目前仅switchTab会处理
+        // 简单起见，暂时直接判断该情况，执行onShow
+        callOnShow = true;
         pages.reverse().forEach(page => {
           if (!page.$page.meta.isTabBar && page !== currentPage) {
             page.$remove();
@@ -8408,8 +8530,7 @@ var serviceContext = (function () {
           }
         }, 100);
       } else {
-        // 前一个 tabBar 触发 onHide
-        currentPage.$vm.__call_hook('onHide');
+        callOnHide = true;
       }
     }
 
@@ -8417,8 +8538,8 @@ var serviceContext = (function () {
     // 查找当前 tabBarPage，且设置 visible
     getCurrentPages(true).forEach(page => {
       if (('/' + page.route) === path) {
-        if (!page.$page.meta.visible) {
-          page.$vm.__call_hook('onShow');
+        if (!page.$page.meta.visible) { // 之前未显示
+          callOnShow = true;
         }
         page.$page.meta.visible = true;
         tabBarPage = page;
@@ -8428,9 +8549,17 @@ var serviceContext = (function () {
         }
       }
     });
-
+    // 相同tabBar页面
+    if (currentPage === tabBarPage) {
+      callOnHide = false;
+    }
+    if (currentPage && callOnHide) {
+      currentPage.$vm.__call_hook('onHide');
+    }
     if (tabBarPage) {
       tabBarPage.$getAppWebview().show('none');
+      // 等visible状态都切换完之后，再触发onShow，否则开发者在onShow里边 getCurrentPages 会不准确
+      callOnShow && tabBarPage.$vm.__call_hook('onShow');
     } else {
       return showWebview(registerPage({
         url,
@@ -8464,6 +8593,198 @@ var serviceContext = (function () {
         from
       }, callbackId);
     }, openType === 'appLaunch');
+  }
+
+  const STORAGE_DATA_TYPE = '__TYPE';
+  const STORAGE_KEYS = 'uni-storage-keys';
+
+  function parseValue (value) {
+    const types = ['object', 'string', 'number', 'boolean', 'undefined'];
+    try {
+      const object = typeof value === 'string' ? JSON.parse(value) : value;
+      const type = object.type;
+      if (types.indexOf(type) >= 0) {
+        const keys = Object.keys(object);
+        // eslint-disable-next-line valid-typeof
+        if (keys.length === 2 && 'data' in object && typeof object.data === type) {
+          return object.data
+        } else if (keys.length === 1) {
+          return ''
+        }
+      }
+    } catch (error) {}
+  }
+
+  function setStorage$1 ({
+    key,
+    data,
+    isSync
+  } = {}, callbackId) {
+    const type = typeof data;
+    const value = type === 'string' ? data : JSON.stringify({
+      type,
+      data: data
+    });
+    try {
+      if (type === 'string' && parseValue(value) !== undefined) {
+        plus.storage.setItemAsync(key + STORAGE_DATA_TYPE, type);
+      } else {
+        plus.storage.removeItemAsync(key + STORAGE_DATA_TYPE);
+      }
+      plus.storage.setItemAsync(key, value, function () {
+        invoke$1(callbackId, {
+          errMsg: 'setStorage:ok'
+        });
+      }, function (err) {
+        invoke$1(callbackId, {
+          errMsg: `setStorage:fail ${err.message}`
+        });
+      });
+    } catch (error) {
+      invoke$1(callbackId, {
+        errMsg: `setStorage:fail ${error}`
+      });
+    }
+  }
+
+  function setStorageSync$1 (key, data) {
+    const type = typeof data;
+    const value = type === 'string' ? data : JSON.stringify({
+      type,
+      data: data
+    });
+    try {
+      if (type === 'string' && parseValue(value) !== undefined) {
+        plus.storage.setItem(key + STORAGE_DATA_TYPE, type);
+      } else {
+        plus.storage.removeItem(key + STORAGE_DATA_TYPE);
+      }
+      plus.storage.setItem(key, value);
+    } catch (error) {
+
+    }
+  }
+
+  function parseGetStorage (type, value) {
+    let data = value;
+    if (type !== 'string' || (type === 'string' && value === '{"type":"undefined"}')) {
+      try {
+        // 兼容H5和V3初期历史格式
+        let object = JSON.parse(value);
+        const result = parseValue(object);
+        if (result !== undefined) {
+          data = result;
+        } else if (type) {
+          // 兼容App端历史格式
+          data = object;
+          if (typeof object === 'string') {
+            object = JSON.parse(object);
+            // eslint-disable-next-line valid-typeof
+            data = typeof object === (type === 'null' ? 'object' : type) ? object : data;
+          }
+        }
+      } catch (error) {}
+    }
+    return data
+  }
+
+  function getStorage$1 ({
+    key
+  } = {}, callbackId) {
+    plus.storage.getItemAsync(key, function (res) {
+      plus.storage.getItemAsync(key + STORAGE_DATA_TYPE, function (typeRes) {
+        const typeOrigin = typeRes.data || '';
+        const type = typeOrigin.toLowerCase();
+        invoke$1(callbackId, {
+          data: parseGetStorage(type, res.data),
+          errMsg: 'getStorage:ok'
+        });
+      }, function () {
+        const type = '';
+        invoke$1(callbackId, {
+          data: parseGetStorage(type, res.data),
+          errMsg: 'getStorage:ok'
+        });
+      });
+    }, function (err) {
+      invoke$1(callbackId, {
+        data: '',
+        errMsg: `getStorage:fail ${err.message}`
+      });
+    });
+  }
+
+  function getStorageSync$1 (key) {
+    const value = plus.storage.getItem(key);
+    const typeOrigin = plus.storage.getItem(key + STORAGE_DATA_TYPE) || '';
+    const type = typeOrigin.toLowerCase();
+    if (typeof value !== 'string') {
+      return ''
+    }
+    return parseGetStorage(type, value)
+  }
+
+  function removeStorage$1 ({
+    key
+  } = {}, callbackId) {
+    // 兼容App端历史格式
+    plus.storage.removeItemAsync(key + STORAGE_DATA_TYPE);
+    plus.storage.removeItemAsync(key, function (res) {
+      invoke$1(callbackId, {
+        errMsg: 'removeStorage:ok'
+      });
+    }, function (err) {
+      invoke$1(callbackId, {
+        errMsg: `removeStorage:fail ${err.message}`
+      });
+    });
+  }
+
+  function removeStorageSync$1 (key) {
+    plus.storage.removeItem(key + STORAGE_DATA_TYPE);
+    plus.storage.removeItem(key);
+  }
+
+  function clearStorage (args, callbackId) {
+    plus.storage.clearAsync(function (res) {
+      invoke$1(callbackId, {
+        errMsg: 'clearStorage:ok'
+      });
+    }, function (err) {
+      invoke$1(callbackId, {
+        errMsg: `clearStorage:fail ${err.message}`
+      });
+    });
+  }
+
+  function clearStorageSync () {
+    plus.storage.clear();
+  }
+
+  function getStorageInfo () {
+    const length = (plus.storage.length || plus.storage.getLength()) || 0;
+    const keys = [];
+    let currentSize = 0;
+    for (let index = 0; index < length; index++) {
+      const key = plus.storage.key(index);
+      if (key !== STORAGE_KEYS && key.indexOf(STORAGE_DATA_TYPE) + STORAGE_DATA_TYPE.length !== key.length) {
+        const value = plus.storage.getItem(key);
+        currentSize += key.length + value.length;
+        keys.push(key);
+      }
+    }
+    return {
+      keys,
+      currentSize: Math.ceil(currentSize * 2 / 1024),
+      limitSize: Number.MAX_VALUE,
+      errMsg: 'getStorageInfo:ok'
+    }
+  }
+
+  function getStorageInfoSync () {
+    const res = getStorageInfo();
+    delete res.errMsg;
+    return res
   }
 
   function showKeyboard () {
@@ -8534,6 +8855,10 @@ var serviceContext = (function () {
       plus.navigator.setStatusBarStyle(frontColor === '#000000' ? 'dark' : 'light');
       const style = webview.getStyle();
       if (style && style.titleNView) {
+        if (style.titleNView.autoBackButton) {
+          styles.backButton = styles.backButton || {};
+          styles.backButton.color = frontColor;
+        }
         webview.setStyle({
           titleNView: styles
         });
@@ -8578,7 +8903,7 @@ var serviceContext = (function () {
         waiting.close();
       }
       if (~['top', 'center', 'bottom'].indexOf(position)) {
-        let richText = `<span>${title}</span>`;
+        const richText = `<span>${title}</span>`;
         plus.nativeUI.toast(richText, {
           verticalAlign: position,
           type: 'richtext'
@@ -8695,11 +9020,13 @@ var serviceContext = (function () {
   function showActionSheet$1 ({
     itemList = [],
     itemColor = '#000000',
-    title = ''
+    title = '',
+    popover
   }, callbackId) {
     const options = {
       buttons: itemList.map(item => ({
-        title: item
+        title: item,
+        color: itemColor
       }))
     };
     if (title) {
@@ -8707,10 +9034,10 @@ var serviceContext = (function () {
     }
 
     if (plus.os.name === 'iOS') {
-      options.cancel = '取消';
+      options.cancel = '';
     }
 
-    plus.nativeUI.actionSheet(options, (e) => {
+    plus.nativeUI.actionSheet(Object.assign(options, { popover }), (e) => {
       if (e.index > 0) {
         invoke$1(callbackId, {
           errMsg: 'showActionSheet:ok',
@@ -8859,16 +9186,16 @@ var serviceContext = (function () {
     }
   }
 
-  const callbacks$3 = {};
+  const callbacks$4 = {};
 
   function createCallbacks (namespace) {
-    let scopedCallbacks = callbacks$3[namespace];
+    let scopedCallbacks = callbacks$4[namespace];
     if (!scopedCallbacks) {
       scopedCallbacks = {
         id: 1,
         callbacks: Object.create(null)
       };
-      callbacks$3[namespace] = scopedCallbacks;
+      callbacks$4[namespace] = scopedCallbacks;
     }
     return {
       get (id) {
@@ -8913,14 +9240,14 @@ var serviceContext = (function () {
   }
 
   function findAttrs (ids, elm, result) {
-    let nodes = elm.children;
+    const nodes = elm.children;
     if (!Array.isArray(nodes)) {
       return false
     }
     for (let i = 0; i < nodes.length; i++) {
-      let node = nodes[i];
+      const node = nodes[i];
       if (node.attr) {
-        let index = ids.indexOf(node.attr.id);
+        const index = ids.indexOf(node.attr.id);
         if (index >= 0) {
           result[index] = {
             id: ids[index],
@@ -8939,7 +9266,7 @@ var serviceContext = (function () {
   }
 
   function getSelectors (queue) {
-    let ids = [];
+    const ids = [];
     for (let i = 0; i < queue.length; i++) {
       const selector = queue[i].selector;
       if (selector.indexOf('#') === 0) {
@@ -8968,7 +9295,7 @@ var serviceContext = (function () {
     // TODO 重构，逻辑不对，queue 里的每一项可能有单独的作用域查找（即 component）
     const dom = pageVm._$weex.requireModule('dom');
     const selectors = getSelectors(queue);
-    let outAttrs = new Array(selectors.length);
+    const outAttrs = new Array(selectors.length);
     findAttrs(selectors, pageVm.$el, outAttrs);
     getComponentRectAll(dom, outAttrs, 0, [], (result) => {
       callback(result);
@@ -8984,17 +9311,14 @@ var serviceContext = (function () {
   const eventNames = [
     'load',
     'close',
+    'verify',
     'error'
   ];
 
   const ERROR_CODE_LIST = [-5001, -5002, -5003, -5004, -5005, -5006];
 
   class RewardedVideoAd {
-    constructor (adpid) {
-      this._options = {
-        adpid: adpid
-      };
-
+    constructor (options = {}) {
       const _callbacks = this._callbacks = {};
       eventNames.forEach(item => {
         _callbacks[item] = [];
@@ -9008,7 +9332,7 @@ var serviceContext = (function () {
       this._adError = '';
       this._loadPromiseResolve = null;
       this._loadPromiseReject = null;
-      const rewardAd = this._rewardAd = plus.ad.createRewardedVideoAd(this._options);
+      const rewardAd = this._rewardAd = plus.ad.createRewardedVideoAd(options);
       rewardAd.onLoad((e) => {
         this._isLoad = true;
         this._dispatchEvent('load', {});
@@ -9020,6 +9344,9 @@ var serviceContext = (function () {
       rewardAd.onClose((e) => {
         this._loadAd();
         this._dispatchEvent('close', { isEnded: e.isEnded });
+      });
+      rewardAd.onVerify && rewardAd.onVerify((e) => {
+        this._dispatchEvent('verify', { isValid: e.isValid });
       });
       rewardAd.onError((e) => {
         const { code, message } = e;
@@ -9033,6 +9360,7 @@ var serviceContext = (function () {
       });
       this._loadAd();
     }
+
     load () {
       return new Promise((resolve, reject) => {
         if (this._isLoad) {
@@ -9044,6 +9372,7 @@ var serviceContext = (function () {
         this._loadAd();
       })
     }
+
     show () {
       return new Promise((resolve, reject) => {
         if (this._isLoad) {
@@ -9054,10 +9383,20 @@ var serviceContext = (function () {
         }
       })
     }
+
+    getProvider () {
+      return this._rewardAd.getProvider()
+    }
+
+    destroy () {
+      this._rewardAd.destroy();
+    }
+
     _loadAd () {
       this._isLoad = false;
       this._rewardAd.load();
     }
+
     _dispatchEvent (name, data) {
       this._callbacks[name].forEach(callback => {
         if (typeof callback === 'function') {
@@ -9067,13 +9406,9 @@ var serviceContext = (function () {
     }
   }
 
-  function createRewardedVideoAd ({
-    adpid = ''
-  } = {}) {
-    return new RewardedVideoAd(adpid)
+  function createRewardedVideoAd (options) {
+    return new RewardedVideoAd(options)
   }
-
-
 
   var api = /*#__PURE__*/Object.freeze({
     __proto__: null,
@@ -9153,7 +9488,7 @@ var serviceContext = (function () {
     chooseVideo: chooseVideo$1,
     compressImage: compressImage,
     getImageInfo: getImageInfo$1,
-    previewImage: previewImage$1,
+    previewImagePlus: previewImagePlus,
     operateRecorder: operateRecorder,
     saveImageToPhotosAlbum: saveImageToPhotosAlbum,
     saveVideoToPhotosAlbum: saveVideoToPhotosAlbum,
@@ -9182,11 +9517,23 @@ var serviceContext = (function () {
     restoreGlobal: restoreGlobal,
     getSubNVueById: getSubNVueById,
     getCurrentSubNVue: getCurrentSubNVue,
+    onNativeEventReceive: onNativeEventReceive,
+    sendNativeEvent: sendNativeEvent,
     navigateBack: navigateBack$1,
     navigateTo: navigateTo$1,
     reLaunch: reLaunch$1,
     redirectTo: redirectTo$1,
     switchTab: switchTab$1,
+    setStorage: setStorage$1,
+    setStorageSync: setStorageSync$1,
+    getStorage: getStorage$1,
+    getStorageSync: getStorageSync$1,
+    removeStorage: removeStorage$1,
+    removeStorageSync: removeStorageSync$1,
+    clearStorage: clearStorage,
+    clearStorageSync: clearStorageSync,
+    getStorageInfo: getStorageInfo,
+    getStorageInfoSync: getStorageInfoSync,
     showKeyboard: showKeyboard,
     hideKeyboard: hideKeyboard,
     setNavigationBarTitle: setNavigationBarTitle$1,
@@ -9331,20 +9678,25 @@ var serviceContext = (function () {
         Object.defineProperty(this, name, data);
       });
     }
+
     play () {
       this._operate('play');
     }
+
     pause () {
       this._operate('pause');
     }
+
     stop () {
       this._operate('stop');
     }
+
     seek (position) {
       this._operate('seek', {
         currentTime: position * 1e3
       });
     }
+
     destroy () {
       clearInterval(this.__timing);
       invokeMethod('destroyAudioInstance', {
@@ -9352,6 +9704,7 @@ var serviceContext = (function () {
       });
       delete innerAudioContexts[this.id];
     }
+
     _operate (type, options) {
       invokeMethod('operateAudio', Object.assign({}, options, {
         audioId: this.id,
@@ -9437,9 +9790,9 @@ var serviceContext = (function () {
     'error',
     'waiting'
   ];
-  const callbacks$4 = {};
+  const callbacks$5 = {};
   eventNames$2.forEach(name => {
-    callbacks$4[name] = [];
+    callbacks$5[name] = [];
   });
 
   const props$1 = [
@@ -9503,7 +9856,7 @@ var serviceContext = (function () {
         errMsg,
         errCode
       }) => {
-        callbacks$4[state].forEach(callback => {
+        callbacks$5[state].forEach(callback => {
           if (typeof callback === 'function') {
             callback(state === 'error' ? {
               errMsg,
@@ -9531,20 +9884,25 @@ var serviceContext = (function () {
         Object.defineProperty(this, name, data);
       });
     }
+
     play () {
       this._operate('play');
     }
+
     pause () {
       this._operate('pause');
     }
+
     stop () {
       this._operate('stop');
     }
+
     seek (position) {
       this._operate('seek', {
         currentTime: position
       });
     }
+
     _operate (type, options) {
       invokeMethod('operateBackgroundAudio', Object.assign({}, options, {
         operationType: type
@@ -9555,7 +9913,7 @@ var serviceContext = (function () {
   eventNames$2.forEach(item => {
     const name = item[0].toUpperCase() + item.substr(1);
     BackgroundAudioManager.prototype[`on${name}`] = function (callback) {
-      callbacks$4[item].push(callback);
+      callbacks$5[item].push(callback);
     };
   });
 
@@ -9753,11 +10111,13 @@ var serviceContext = (function () {
   };
 
   function checkColor (e) {
+    // 其他开发者适配的echarts会传入一个undefined到这里
+    e = e || '#000000';
     var t = null;
     if ((t = /^#([0-9|A-F|a-f]{6})$/.exec(e)) != null) {
-      let n = parseInt(t[1].slice(0, 2), 16);
-      let o = parseInt(t[1].slice(2, 4), 16);
-      let r = parseInt(t[1].slice(4), 16);
+      const n = parseInt(t[1].slice(0, 2), 16);
+      const o = parseInt(t[1].slice(2, 4), 16);
+      const r = parseInt(t[1].slice(4), 16);
       return [n, o, r, 255]
     }
     if ((t = /^#([0-9|A-F|a-f]{3})$/.exec(e)) != null) {
@@ -9780,11 +10140,11 @@ var serviceContext = (function () {
       })
     }
     var i = e.toLowerCase();
-    if (predefinedColor.hasOwnProperty(i)) {
+    if (hasOwn(predefinedColor, i)) {
       t = /^#([0-9|A-F|a-f]{6,8})$/.exec(predefinedColor[i]);
-      let n = parseInt(t[1].slice(0, 2), 16);
-      let o = parseInt(t[1].slice(2, 4), 16);
-      let r = parseInt(t[1].slice(4, 6), 16);
+      const n = parseInt(t[1].slice(0, 2), 16);
+      const o = parseInt(t[1].slice(2, 4), 16);
+      const r = parseInt(t[1].slice(4, 6), 16);
       let a = parseInt(t[1].slice(6, 8), 16);
       a = a >= 0 ? a : 255;
       return [n, o, r, a]
@@ -9806,6 +10166,7 @@ var serviceContext = (function () {
       this.data = data;
       this.colorStop = [];
     }
+
     addColorStop (position, color) {
       this.colorStop.push([position, checkColor(color)]);
     }
@@ -9820,6 +10181,7 @@ var serviceContext = (function () {
   ];
 
   var tempCanvas;
+
   function getTempCanvas (width = 0, height = 0) {
     if (!tempCanvas) {
       tempCanvas = document.createElement('canvas');
@@ -9856,6 +10218,7 @@ var serviceContext = (function () {
         fontFamily: 'sans-serif'
       };
     }
+
     draw (reserve = false, callback) {
       var actions = [...this.actions];
       this.actions = [];
@@ -9872,21 +10235,26 @@ var serviceContext = (function () {
         callbackId
       });
     }
+
     createLinearGradient (x0, y0, x1, y1) {
       return new CanvasGradient('linear', [x0, y0, x1, y1])
     }
+
     createCircularGradient (x, y, r) {
       return new CanvasGradient('radial', [x, y, r])
     }
+
     createPattern (image, repetition) {
       if (undefined === repetition) {
         console.error("Failed to execute 'createPattern' on 'CanvasContext': 2 arguments required, but only 1 present.");
       } else if (['repeat', 'repeat-x', 'repeat-y', 'no-repeat'].indexOf(repetition) < 0) {
-        console.error("Failed to execute 'createPattern' on 'CanvasContext': The provided type ('" + repetition + "') is not one of 'repeat', 'no-repeat', 'repeat-x', or 'repeat-y'.");
+        console.error("Failed to execute 'createPattern' on 'CanvasContext': The provided type ('" + repetition +
+          "') is not one of 'repeat', 'no-repeat', 'repeat-x', or 'repeat-y'.");
       } else {
         return new Pattern(image, repetition)
       }
     }
+
     // TODO
     measureText (text) {
       if (typeof document === 'object') {
@@ -9897,6 +10265,7 @@ var serviceContext = (function () {
         return new TextMetrics(0)
       }
     }
+
     save () {
       this.actions.push({
         method: 'save',
@@ -9904,6 +10273,7 @@ var serviceContext = (function () {
       });
       this.drawingState.push(this.state);
     }
+
     restore () {
       this.actions.push({
         method: 'restore',
@@ -9922,10 +10292,12 @@ var serviceContext = (function () {
         fontFamily: 'sans-serif'
       };
     }
+
     beginPath () {
       this.path = [];
       this.subpath = [];
     }
+
     moveTo (x, y) {
       this.path.push({
         method: 'moveTo',
@@ -9935,6 +10307,7 @@ var serviceContext = (function () {
         [x, y]
       ];
     }
+
     lineTo (x, y) {
       if (this.path.length === 0 && this.subpath.length === 0) {
         this.path.push({
@@ -9949,6 +10322,7 @@ var serviceContext = (function () {
       }
       this.subpath.push([x, y]);
     }
+
     quadraticCurveTo (cpx, cpy, x, y) {
       this.path.push({
         method: 'quadraticCurveTo',
@@ -9956,6 +10330,7 @@ var serviceContext = (function () {
       });
       this.subpath.push([x, y]);
     }
+
     bezierCurveTo (cp1x, cp1y, cp2x, cp2y, x, y) {
       this.path.push({
         method: 'bezierCurveTo',
@@ -9963,6 +10338,7 @@ var serviceContext = (function () {
       });
       this.subpath.push([x, y]);
     }
+
     arc (x, y, r, sAngle, eAngle, counterclockwise = false) {
       this.path.push({
         method: 'arc',
@@ -9970,6 +10346,7 @@ var serviceContext = (function () {
       });
       this.subpath.push([x, y]);
     }
+
     rect (x, y, width, height) {
       this.path.push({
         method: 'rect',
@@ -9979,6 +10356,7 @@ var serviceContext = (function () {
         [x, y]
       ];
     }
+
     arcTo (x1, y1, x2, y2, radius) {
       this.path.push({
         method: 'arcTo',
@@ -9986,12 +10364,14 @@ var serviceContext = (function () {
       });
       this.subpath.push([x2, y2]);
     }
+
     clip () {
       this.actions.push({
         method: 'clip',
         data: [...this.path]
       });
     }
+
     closePath () {
       this.path.push({
         method: 'closePath',
@@ -10001,52 +10381,61 @@ var serviceContext = (function () {
         this.subpath = [this.subpath.shift()];
       }
     }
+
     clearActions () {
       this.actions = [];
       this.path = [];
       this.subpath = [];
     }
+
     getActions () {
       var actions = [...this.actions];
       this.clearActions();
       return actions
     }
+
     set lineDashOffset (value) {
       this.actions.push({
         method: 'setLineDashOffset',
         data: [value]
       });
     }
+
     set globalCompositeOperation (type) {
       this.actions.push({
         method: 'setGlobalCompositeOperation',
         data: [type]
       });
     }
+
     set shadowBlur (level) {
       this.actions.push({
         method: 'setShadowBlur',
         data: [level]
       });
     }
+
     set shadowColor (color) {
       this.actions.push({
         method: 'setShadowColor',
         data: [color]
       });
     }
+
     set shadowOffsetX (x) {
       this.actions.push({
         method: 'setShadowOffsetX',
         data: [x]
       });
     }
+
     set shadowOffsetY (y) {
       this.actions.push({
         method: 'setShadowOffsetY',
         data: [y]
       });
     }
+
     set font (value) {
       var self = this;
       this.state.font = value;
@@ -10095,6 +10484,7 @@ var serviceContext = (function () {
       } else {
         console.warn("Failed to set 'font' on 'CanvasContext': invalid format.");
       }
+
       function pushAction () {
         actions.push({
           method: 'setFontWeight',
@@ -10103,15 +10493,19 @@ var serviceContext = (function () {
         self.state.fontWeight = 'normal';
       }
     }
+
     get font () {
       return this.state.font
     }
+
     set fillStyle (color) {
       this.setFillStyle(color);
     }
+
     set strokeStyle (color) {
       this.setStrokeStyle(color);
     }
+
     set globalAlpha (value) {
       value = Math.floor(255 * parseFloat(value));
       this.actions.push({
@@ -10119,36 +10513,42 @@ var serviceContext = (function () {
         data: [value]
       });
     }
+
     set textAlign (align) {
       this.actions.push({
         method: 'setTextAlign',
         data: [align]
       });
     }
+
     set lineCap (type) {
       this.actions.push({
         method: 'setLineCap',
         data: [type]
       });
     }
+
     set lineJoin (type) {
       this.actions.push({
         method: 'setLineJoin',
         data: [type]
       });
     }
+
     set lineWidth (value) {
       this.actions.push({
         method: 'setLineWidth',
         data: [value]
       });
     }
+
     set miterLimit (value) {
       this.actions.push({
         method: 'setMiterLimit',
         data: [value]
       });
     }
+
     set textBaseline (type) {
       this.actions.push({
         method: 'setTextBaseline',
@@ -10213,10 +10613,13 @@ var serviceContext = (function () {
               dHeight = undefined;
             }
             var data;
+
             function isNumber (e) {
               return typeof e === 'number'
             }
-            data = isNumber(dx) && isNumber(dy) && isNumber(dWidth) && isNumber(dHeight) ? [imageResource, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight] : isNumber(sWidth) && isNumber(
+            data = isNumber(dx) && isNumber(dy) && isNumber(dWidth) && isNumber(dHeight) ? [imageResource, sx, sy,
+              sWidth, sHeight, dx, dy, dWidth, dHeight
+            ] : isNumber(sWidth) && isNumber(
               sHeight) ? [imageResource, sx, sy, sWidth, sHeight] : [imageResource, sx, sy];
             this.actions.push({
               method,
@@ -10363,8 +10766,9 @@ var serviceContext = (function () {
     var cId = canvasEventCallbacks.push(function (data) {
       invoke$1(callbackId, data);
     });
+    // fix ...
     operateCanvas(canvasId, pageId, 'putImageData', {
-      data: [...data],
+      data: Array.prototype.slice.call(data),
       x,
       y,
       width,
@@ -10446,24 +10850,12 @@ var serviceContext = (function () {
     callback.invoke(callbackId, data);
   });
 
-  const methods = ['getCenterLocation', 'getScale', 'getRegion'];
+  const methods = ['getCenterLocation', 'moveToLocation', 'getScale', 'getRegion', 'includePoints', 'translateMarker'];
 
   class MapContext {
     constructor (id, pageVm) {
       this.id = id;
       this.pageVm = pageVm;
-    }
-
-    moveToLocation () {
-      operateMapPlayer$3(this.id, this.pageVm, 'moveToLocation');
-    }
-
-    includePoints (args) {
-      operateMapPlayer$3(this.id, this.pageVm, 'includePoints', args);
-    }
-
-    translateMarker (args) {
-      operateMapPlayer$3(this.id, this.pageVm, 'translateMarker', args);
     }
   }
 
@@ -10473,10 +10865,8 @@ var serviceContext = (function () {
 
   methods.forEach(function (method) {
     MapContext.prototype[method] = callback.warp(function (options, callbackId) {
-      operateMapPlayer$3(this.id, this.pageVm, method, {
-        options,
-        callbackId
-      });
+      options.callbackId = callbackId;
+      operateMapPlayer$3(this.id, this.pageVm, method, options);
     });
   });
 
@@ -10508,20 +10898,25 @@ var serviceContext = (function () {
     play () {
       operateVideoPlayer$3(this.id, this.pageVm, 'play');
     }
+
     pause () {
       operateVideoPlayer$3(this.id, this.pageVm, 'pause');
     }
+
     stop () {
       operateVideoPlayer$3(this.id, this.pageVm, 'stop');
     }
+
     seek (position) {
       operateVideoPlayer$3(this.id, this.pageVm, 'seek', {
         position
       });
     }
+
     sendDanmu (args) {
       operateVideoPlayer$3(this.id, this.pageVm, 'sendDanmu', args);
     }
+
     playbackRate (rate) {
       if (!~RATES.indexOf(rate)) {
         rate = 1.0;
@@ -10530,15 +10925,19 @@ var serviceContext = (function () {
         rate
       });
     }
+
     requestFullScreen (args = {}) {
       operateVideoPlayer$3(this.id, this.pageVm, 'requestFullScreen', args);
     }
+
     exitFullScreen () {
       operateVideoPlayer$3(this.id, this.pageVm, 'exitFullScreen');
     }
+
     showStatusBar () {
       operateVideoPlayer$3(this.id, this.pageVm, 'showStatusBar');
     }
+
     hideStatusBar () {
       operateVideoPlayer$3(this.id, this.pageVm, 'hideStatusBar');
     }
@@ -10579,6 +10978,7 @@ var serviceContext = (function () {
       this.id = id;
       this.pageId = pageId;
     }
+
     format (name, value) {
       operateEditor(this.id, this.pageId, 'format', {
         options: {
@@ -10603,10 +11003,10 @@ var serviceContext = (function () {
     EditorContext: EditorContext
   });
 
-  const callbacks$5 = [];
+  const callbacks$6 = [];
 
   onMethod('onAccelerometerChange', function (res) {
-    callbacks$5.forEach(callbackId => {
+    callbacks$6.forEach(callbackId => {
       invoke$1(callbackId, res);
     });
   });
@@ -10618,7 +11018,7 @@ var serviceContext = (function () {
    */
   function onAccelerometerChange (callbackId) {
     // TODO 当没有 start 时，添加 on 需要主动 start?
-    callbacks$5.push(callbackId);
+    callbacks$6.push(callbackId);
     if (!isEnable) {
       startAccelerometer();
     }
@@ -10675,10 +11075,10 @@ var serviceContext = (function () {
     onBLECharacteristicValueChange: onBLECharacteristicValueChange$1
   });
 
-  const callbacks$6 = [];
+  const callbacks$7 = [];
 
   onMethod('onCompassChange', function (res) {
-    callbacks$6.forEach(callbackId => {
+    callbacks$7.forEach(callbackId => {
       invoke$1(callbackId, res);
     });
   });
@@ -10690,7 +11090,7 @@ var serviceContext = (function () {
    */
   function onCompassChange (callbackId) {
     // TODO 当没有 start 时，添加 on 需要主动 start?
-    callbacks$6.push(callbackId);
+    callbacks$7.push(callbackId);
     if (!isEnable$1) {
       startCompass();
     }
@@ -10722,16 +11122,16 @@ var serviceContext = (function () {
     stopCompass: stopCompass
   });
 
-  const callbacks$7 = [];
+  const callbacks$8 = [];
 
   onMethod('onNetworkStatusChange', res => {
-    callbacks$7.forEach(callbackId => {
+    callbacks$8.forEach(callbackId => {
       invoke$1(callbackId, res);
     });
   });
 
   function onNetworkStatusChange (callbackId) {
-    callbacks$7.push(callbackId);
+    callbacks$8.push(callbackId);
   }
 
   var require_context_module_1_13 = /*#__PURE__*/Object.freeze({
@@ -10739,12 +11139,57 @@ var serviceContext = (function () {
     onNetworkStatusChange: onNetworkStatusChange
   });
 
-  const callbacks$8 = {
-    pause: [],
-    resume: [],
-    start: [],
-    stop: [],
-    error: []
+  const callbacks$9 = [];
+
+  onMethod('onUIStyleChange', function (res) {
+    callbacks$9.forEach(callbackId => {
+      invoke$1(callbackId, res);
+    });
+  });
+
+  function onUIStyleChange (callbackId) {
+    callbacks$9.push(callbackId);
+  }
+
+  var require_context_module_1_14 = /*#__PURE__*/Object.freeze({
+    __proto__: null,
+    onUIStyleChange: onUIStyleChange
+  });
+
+  const longPressActionsCallbackId = 'longPressActionsCallback';
+
+  let longPressActions = {};
+
+  onMethod(longPressActionsCallbackId, function (res) {
+    const errMsg = res.errMsg || '';
+    if (new RegExp('\\:\\s*fail').test(errMsg)) {
+      longPressActions.fail && longPressActions.fail(res);
+    } else {
+      longPressActions.success && longPressActions.success(res);
+    }
+    longPressActions.complete && longPressActions.complete(res);
+  });
+
+  function previewImage$1 (args = {}) {
+    longPressActions = args.longPressActions || {};
+    if (longPressActions.success || longPressActions.fail || longPressActions.complete) {
+      longPressActions.callbackId = longPressActionsCallbackId;
+    }
+
+    return invokeMethod('previewImagePlus', args)
+  }
+
+  var require_context_module_1_15 = /*#__PURE__*/Object.freeze({
+    __proto__: null,
+    previewImage: previewImage$1
+  });
+
+  const callbacks$a = {
+    pause: null,
+    resume: null,
+    start: null,
+    stop: null,
+    error: null
   };
 
   class RecorderManager {
@@ -10753,52 +11198,62 @@ var serviceContext = (function () {
         const state = res.state;
         delete res.state;
         delete res.errMsg;
-        callbacks$8[state].forEach(callback => {
-          if (typeof callback === 'function') {
-            callback(res);
-          }
-        });
+        if (typeof callbacks$a[state] === 'function') {
+          callbacks$a[state](res);
+        }
       });
     }
+
     onError (callback) {
-      callbacks$8.error.push(callback);
+      callbacks$a.error = callback;
     }
+
     onFrameRecorded (callback) {
 
     }
+
     onInterruptionBegin (callback) {
 
     }
+
     onInterruptionEnd (callback) {
 
     }
+
     onPause (callback) {
-      callbacks$8.pause.push(callback);
+      callbacks$a.pause = callback;
     }
+
     onResume (callback) {
-      callbacks$8.resume.push(callback);
+      callbacks$a.resume = callback;
     }
+
     onStart (callback) {
-      callbacks$8.start.push(callback);
+      callbacks$a.start = callback;
     }
+
     onStop (callback) {
-      callbacks$8.stop.push(callback);
+      callbacks$a.stop = callback;
     }
+
     pause () {
       invokeMethod('operateRecorder', {
         operationType: 'pause'
       });
     }
+
     resume () {
       invokeMethod('operateRecorder', {
         operationType: 'resume'
       });
     }
+
     start (options) {
       invokeMethod('operateRecorder', Object.assign({}, options, {
         operationType: 'start'
       }));
     }
+
     stop () {
       invokeMethod('operateRecorder', {
         operationType: 'stop'
@@ -10812,7 +11267,7 @@ var serviceContext = (function () {
     return recorderManager || (recorderManager = new RecorderManager())
   }
 
-  var require_context_module_1_14 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_16 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     getRecorderManager: getRecorderManager
   });
@@ -10823,27 +11278,32 @@ var serviceContext = (function () {
       this._callbackId = callbackId;
       this._callbacks = [];
     }
+
     abort () {
       invokeMethod('operateRequestTask', {
         downloadTaskId: this.id,
         operationType: 'abort'
       });
     }
+
     onProgressUpdate (callback) {
       if (typeof callback !== 'function') {
         return
       }
       this._callbacks.push(callback);
     }
+
     onHeadersReceived () {
 
     }
+
     offProgressUpdate (callback) {
       const index = this._callbacks.indexOf(callback);
       if (index >= 0) {
         this._callbacks.splice(index, 1);
       }
     }
+
     offHeadersReceived () {
 
     }
@@ -10901,7 +11361,7 @@ var serviceContext = (function () {
     return task
   }
 
-  var require_context_module_1_15 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_17 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     downloadFile: downloadFile$1
   });
@@ -11017,7 +11477,7 @@ var serviceContext = (function () {
     return new RequestTask(requestTaskId)
   }
 
-  var require_context_module_1_16 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_18 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     request: request$1
   });
@@ -11037,6 +11497,7 @@ var serviceContext = (function () {
       this.OPEN = 1;
       this.readyState = this.CLOSED;
     }
+
     send (args) {
       if (this.readyState !== this.OPEN) {
         this._callback(args, 'sendSocketMessage:fail WebSocket is not connected');
@@ -11049,6 +11510,7 @@ var serviceContext = (function () {
       }));
       this._callback(args, errMsg.replace('operateSocketTask', 'sendSocketMessage'));
     }
+
     close (args) {
       this.readyState = this.CLOSING;
       const {
@@ -11059,23 +11521,28 @@ var serviceContext = (function () {
       }));
       this._callback(args, errMsg.replace('operateSocketTask', 'closeSocket'));
     }
+
     onOpen (callback) {
       this._callbacks.open.push(callback);
     }
+
     onClose (callback) {
       this._callbacks.close.push(callback);
     }
+
     onError (callback) {
       this._callbacks.error.push(callback);
     }
+
     onMessage (callback) {
       this._callbacks.message.push(callback);
     }
+
     _callback ({
       success,
       fail,
       complete
-    }, errMsg) {
+    } = {}, errMsg) {
       var data = {
         errMsg
       };
@@ -11096,7 +11563,7 @@ var serviceContext = (function () {
 
   const socketTasks$1 = Object.create(null);
   const socketTasksArray = [];
-  const callbacks$9 = Object.create(null);
+  const callbacks$b = Object.create(null);
   onMethod('onSocketTaskStateChange', ({
     socketTaskId,
     state,
@@ -11107,18 +11574,11 @@ var serviceContext = (function () {
     if (!socketTask) {
       return
     }
-    socketTask._callbacks[state].forEach(callback => {
-      if (typeof callback === 'function') {
-        callback(state === 'message' ? {
-          data
-        } : {});
-      }
-    });
     if (state === 'open') {
       socketTask.readyState = socketTask.OPEN;
     }
-    if (socketTask === socketTasksArray[0] && callbacks$9[state]) {
-      invoke$1(callbacks$9[state], state === 'message' ? {
+    if (socketTask === socketTasksArray[0] && callbacks$b[state]) {
+      invoke$1(callbacks$b[state], state === 'message' ? {
         data
       } : {});
     }
@@ -11130,6 +11590,13 @@ var serviceContext = (function () {
         socketTasksArray.splice(index, 1);
       }
     }
+    socketTask._callbacks[state].forEach(callback => {
+      if (typeof callback === 'function') {
+        callback(state === 'message' ? {
+          data
+        } : {});
+      }
+    });
   });
 
   function connectSocket$1 (args, callbackId) {
@@ -11177,22 +11644,22 @@ var serviceContext = (function () {
   }
 
   function onSocketOpen (callbackId) {
-    callbacks$9.open = callbackId;
+    callbacks$b.open = callbackId;
   }
 
   function onSocketError (callbackId) {
-    callbacks$9.error = callbackId;
+    callbacks$b.error = callbackId;
   }
 
   function onSocketMessage (callbackId) {
-    callbacks$9.message = callbackId;
+    callbacks$b.message = callbackId;
   }
 
   function onSocketClose (callbackId) {
-    callbacks$9.close = callbackId;
+    callbacks$b.close = callbackId;
   }
 
-  var require_context_module_1_17 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_19 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     connectSocket: connectSocket$1,
     sendSocketMessage: sendSocketMessage$1,
@@ -11209,27 +11676,32 @@ var serviceContext = (function () {
       this._callbackId = callbackId;
       this._callbacks = [];
     }
+
     abort () {
       invokeMethod('operateRequestTask', {
         uploadTaskId: this.id,
         operationType: 'abort'
       });
     }
+
     onProgressUpdate (callback) {
       if (typeof callback !== 'function') {
         return
       }
       this._callbacks.push(callback);
     }
+
     onHeadersReceived () {
 
     }
+
     offProgressUpdate (callback) {
       const index = this._callbacks.indexOf(callback);
       if (index >= 0) {
         this._callbacks.splice(index, 1);
       }
     }
+
     offHeadersReceived () {
 
     }
@@ -11287,176 +11759,9 @@ var serviceContext = (function () {
     return task
   }
 
-  var require_context_module_1_18 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_20 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     uploadFile: uploadFile$1
-  });
-
-  const STORAGE_DATA_TYPE = '__TYPE';
-  const STORAGE_KEYS = 'uni-storage-keys';
-
-  function parseValue (value) {
-    const types = ['object', 'string', 'number', 'boolean', 'undefined'];
-    try {
-      const object = typeof value === 'string' ? JSON.parse(value) : value;
-      const type = object.type;
-      if (types.indexOf(type) >= 0) {
-        const keys = Object.keys(object);
-        // eslint-disable-next-line valid-typeof
-        if (keys.length === 2 && 'data' in object && typeof object.data === type) {
-          return object.data
-        } else if (keys.length === 1) {
-          return ''
-        }
-      }
-    } catch (error) { }
-  }
-
-  function setStorage$1 ({
-    key,
-    data
-  } = {}) {
-    const type = typeof data;
-    const value = type === 'string' ? data : JSON.stringify({
-      type,
-      data: data
-    });
-    try {
-      if (type === 'string' && parseValue(value) !== undefined) {
-        localStorage.setItem(key + STORAGE_DATA_TYPE, type);
-      } else {
-        localStorage.removeItem(key + STORAGE_DATA_TYPE);
-      }
-      localStorage.setItem(key, value);
-    } catch (error) {
-      return {
-        errMsg: `setStorage:fail ${error}`
-      }
-    }
-    return {
-      errMsg: 'setStorage:ok'
-    }
-  }
-
-  function setStorageSync$1 (key, data) {
-    setStorage$1({
-      key,
-      data
-    });
-  }
-
-  function getStorage$1 ({
-    key
-  } = {}) {
-    const value = localStorage && localStorage.getItem(key);
-    if (typeof value !== 'string') {
-      return {
-        data: '',
-        errMsg: 'getStorage:fail'
-      }
-    }
-    let data = value;
-    const typeOrigin = localStorage.getItem(key + STORAGE_DATA_TYPE) || '';
-    const type = typeOrigin.toLowerCase();
-    if (type !== 'string' || (typeOrigin === 'String' && value === '{"type":"undefined"}')) {
-      try {
-        // 兼容H5和V3初期历史格式
-        let object = JSON.parse(value);
-        const result = parseValue(object);
-        if (result !== undefined) {
-          data = result;
-        } else if (type) {
-          // 兼容App端历史格式
-          data = object;
-          if (typeof object === 'string') {
-            object = JSON.parse(object);
-            // eslint-disable-next-line valid-typeof
-            data = typeof object === (type === 'null' ? 'object' : type) ? object : data;
-          }
-        }
-      } catch (error) { }
-    }
-    return {
-      data,
-      errMsg: 'getStorage:ok'
-    }
-  }
-
-  function getStorageSync$1 (key) {
-    const res = getStorage$1({
-      key
-    });
-    return res.data
-  }
-
-  function removeStorage$1 ({
-    key
-  } = {}) {
-    if (localStorage) {
-      // 兼容App端历史格式
-      localStorage.removeItem(key + STORAGE_DATA_TYPE);
-      localStorage.removeItem(key);
-    }
-    return {
-      errMsg: 'removeStorage:ok'
-    }
-  }
-
-  function removeStorageSync$1 (key) {
-    removeStorage$1({
-      key
-    });
-  }
-
-  function clearStorage () {
-    localStorage && localStorage.clear();
-    return {
-      errMsg: 'clearStorage:ok'
-    }
-  }
-
-  function clearStorageSync () {
-    clearStorage();
-  }
-
-  function getStorageInfo () {
-    const length = (localStorage && (localStorage.length || localStorage.getLength())) || 0;
-    const keys = [];
-    let currentSize = 0;
-    for (let index = 0; index < length; index++) {
-      const key = localStorage.key(index);
-      if (key !== STORAGE_KEYS && key.indexOf(STORAGE_DATA_TYPE) + STORAGE_DATA_TYPE.length !== key.length) {
-        const value = localStorage.getItem(key);
-        currentSize += key.length + value.length;
-        keys.push(key);
-      }
-    }
-    return {
-      keys,
-      currentSize: Math.ceil(currentSize * 2 / 1024),
-      limitSize: Number.MAX_VALUE,
-      errMsg: 'getStorageInfo:ok'
-    }
-  }
-
-  function getStorageInfoSync () {
-    const res = getStorageInfo();
-    delete res.errMsg;
-    return res
-  }
-
-  var require_context_module_1_19 = /*#__PURE__*/Object.freeze({
-    __proto__: null,
-    setStorage: setStorage$1,
-    setStorageSync: setStorageSync$1,
-    getStorage: getStorage$1,
-    getStorageSync: getStorageSync$1,
-    removeStorage: removeStorage$1,
-    removeStorageSync: removeStorageSync$1,
-    clearStorage: clearStorage,
-    clearStorageSync: clearStorageSync,
-    getStorageInfo: getStorageInfo,
-    getStorageInfoSync: getStorageInfoSync
   });
 
   const defaultOption = {
@@ -11473,28 +11778,33 @@ var serviceContext = (function () {
       this.currentStepAnimates = [];
       this.option = Object.assign({}, defaultOption, option);
     }
+
     _getOption (option) {
-      let _option = {
+      const _option = {
         transition: Object.assign({}, this.option, option)
       };
       _option.transformOrigin = _option.transition.transformOrigin;
       delete _option.transition.transformOrigin;
       return _option
     }
+
     _pushAnimates (type, args) {
       this.currentStepAnimates.push({
         type: type,
         args: args
       });
     }
+
     _converType (type) {
       return type.replace(/[A-Z]/g, text => {
         return `-${text.toLowerCase()}`
       })
     }
+
     _getValue (value) {
       return typeof value === 'number' ? `${value}px` : value
     }
+
     export () {
       const actions = this.actions;
       this.actions = [];
@@ -11502,6 +11812,7 @@ var serviceContext = (function () {
         actions
       }
     }
+
     step (option) {
       this.currentStepAnimates.forEach(animate => {
         if (animate.type !== 'style') {
@@ -11537,7 +11848,7 @@ var serviceContext = (function () {
     return new MPAnimation(option)
   }
 
-  var require_context_module_1_20 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_21 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     createAnimation: createAnimation
   });
@@ -11556,20 +11867,24 @@ var serviceContext = (function () {
       this.component = component._$id || component; // app-plus 平台传输_$id
       this.options = Object.assign({}, defaultOptions, options);
     }
+
     _makeRootMargin (margins = {}) {
       this.options.rootMargin = ['top', 'right', 'bottom', 'left'].map(name => `${Number(margins[name]) || 0}px`).join(
         ' ');
     }
+
     relativeTo (selector, margins) {
       this.options.relativeToSelector = selector;
       this._makeRootMargin(margins);
       return this
     }
+
     relativeToViewport (margins) {
       this.options.relativeToSelector = null;
       this._makeRootMargin(margins);
       return this
     }
+
     observe (selector, callback) {
       if (typeof callback !== 'function') {
         return
@@ -11584,6 +11899,7 @@ var serviceContext = (function () {
         options: this.options
       }, this.pageId);
     }
+
     disconnect () {
       UniServiceJSBridge.publishHandler('destroyComponentObserver', {
         reqId: this.reqId
@@ -11602,7 +11918,7 @@ var serviceContext = (function () {
     return new ServiceIntersectionObserver(getCurrentPageVm('createIntersectionObserver'), options)
   }
 
-  var require_context_module_1_21 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_22 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     createIntersectionObserver: createIntersectionObserver
   });
@@ -11743,24 +12059,24 @@ var serviceContext = (function () {
     return new SelectorQuery(getCurrentPageVm('createSelectorQuery'))
   }
 
-  var require_context_module_1_22 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_23 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     createSelectorQuery: createSelectorQuery
   });
 
-  const callbacks$a = [];
+  const callbacks$c = [];
 
   onMethod('onKeyboardHeightChange', res => {
-    callbacks$a.forEach(callbackId => {
+    callbacks$c.forEach(callbackId => {
       invoke$1(callbackId, res);
     });
   });
 
   function onKeyboardHeightChange (callbackId) {
-    callbacks$a.push(callbackId);
+    callbacks$c.push(callbackId);
   }
 
-  var require_context_module_1_23 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_24 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     onKeyboardHeightChange: onKeyboardHeightChange
   });
@@ -11785,7 +12101,7 @@ var serviceContext = (function () {
     }, pageId);
   }
 
-  var require_context_module_1_24 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_25 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     loadFontFace: loadFontFace$1
   });
@@ -11798,7 +12114,7 @@ var serviceContext = (function () {
     return {}
   }
 
-  var require_context_module_1_25 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_26 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     pageScrollTo: pageScrollTo$1
   });
@@ -11811,7 +12127,7 @@ var serviceContext = (function () {
     return {}
   }
 
-  var require_context_module_1_26 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_27 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     setPageMeta: setPageMeta
   });
@@ -11836,19 +12152,19 @@ var serviceContext = (function () {
 
   const hideTabBarRedDot$1 = removeTabBarBadge$1;
 
-  const callbacks$b = [];
+  const callbacks$d = [];
 
   onMethod('onTabBarMidButtonTap', res => {
-    callbacks$b.forEach(callbackId => {
+    callbacks$d.forEach(callbackId => {
       invoke$1(callbackId, res);
     });
   });
 
   function onTabBarMidButtonTap (callbackId) {
-    callbacks$b.push(callbackId);
+    callbacks$d.push(callbackId);
   }
 
-  var require_context_module_1_27 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_28 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     removeTabBarBadge: removeTabBarBadge$1,
     showTabBarRedDot: showTabBarRedDot$1,
@@ -11856,25 +12172,25 @@ var serviceContext = (function () {
     onTabBarMidButtonTap: onTabBarMidButtonTap
   });
 
-  const callbacks$c = [];
+  const callbacks$e = [];
   onMethod('onViewDidResize', res => {
-    callbacks$c.forEach(callbackId => {
+    callbacks$e.forEach(callbackId => {
       invoke$1(callbackId, res);
     });
   });
 
   function onWindowResize (callbackId) {
-    callbacks$c.push(callbackId);
+    callbacks$e.push(callbackId);
   }
 
   function offWindowResize (callbackId) {
     // TODO 目前 on 和 off 即使传入同一个 function，获取到的 callbackId 也不会一致，导致不能 off 掉指定
     // 后续修复
     // 此处和微信平台一致查询不到去掉最后一个
-    callbacks$c.splice(callbacks$c.indexOf(callbackId), 1);
+    callbacks$e.splice(callbacks$e.indexOf(callbackId), 1);
   }
 
-  var require_context_module_1_28 = /*#__PURE__*/Object.freeze({
+  var require_context_module_1_29 = /*#__PURE__*/Object.freeze({
     __proto__: null,
     onWindowResize: onWindowResize,
     offWindowResize: offWindowResize
@@ -11899,21 +12215,22 @@ var serviceContext = (function () {
   './device/bluetooth.js': require_context_module_1_11,
   './device/compass.js': require_context_module_1_12,
   './device/network.js': require_context_module_1_13,
-  './media/recorder.js': require_context_module_1_14,
-  './network/download-file.js': require_context_module_1_15,
-  './network/request.js': require_context_module_1_16,
-  './network/socket.js': require_context_module_1_17,
-  './network/upload-file.js': require_context_module_1_18,
-  './storage/storage.js': require_context_module_1_19,
-  './ui/create-animation.js': require_context_module_1_20,
-  './ui/create-intersection-observer.js': require_context_module_1_21,
-  './ui/create-selector-query.js': require_context_module_1_22,
-  './ui/keyboard.js': require_context_module_1_23,
-  './ui/load-font-face.js': require_context_module_1_24,
-  './ui/page-scroll-to.js': require_context_module_1_25,
-  './ui/set-page-meta.js': require_context_module_1_26,
-  './ui/tab-bar.js': require_context_module_1_27,
-  './ui/window.js': require_context_module_1_28,
+  './device/theme.js': require_context_module_1_14,
+  './media/preview-image.js': require_context_module_1_15,
+  './media/recorder.js': require_context_module_1_16,
+  './network/download-file.js': require_context_module_1_17,
+  './network/request.js': require_context_module_1_18,
+  './network/socket.js': require_context_module_1_19,
+  './network/upload-file.js': require_context_module_1_20,
+  './ui/create-animation.js': require_context_module_1_21,
+  './ui/create-intersection-observer.js': require_context_module_1_22,
+  './ui/create-selector-query.js': require_context_module_1_23,
+  './ui/keyboard.js': require_context_module_1_24,
+  './ui/load-font-face.js': require_context_module_1_25,
+  './ui/page-scroll-to.js': require_context_module_1_26,
+  './ui/set-page-meta.js': require_context_module_1_27,
+  './ui/tab-bar.js': require_context_module_1_28,
+  './ui/window.js': require_context_module_1_29,
 
       };
       var req = function req(key) {
@@ -11958,6 +12275,16 @@ var serviceContext = (function () {
     });
   }
 
+  const wx = Object.create(null);
+
+  apis_1.forEach(name => {
+    if (api$2[name]) {
+      wx[name] = wrapper(name, api$2[name]);
+    } else {
+      wx[name] = wrapperUnimplemented(name);
+    }
+  });
+
   function callHook (vm, hook, params) {
     vm = vm.$vm || vm;
     return vm.__call_hook && vm.__call_hook(hook, params)
@@ -11984,7 +12311,7 @@ var serviceContext = (function () {
       return
     }
     if (!page.$page.meta.isNVue) {
-      const target = page.$vm._$vd.elements.find(target => target.tagName === 'web-view' && target.events['message']);
+      const target = page.$vm._$vd.elements.find(target => target.type === 'web-view' && target.events.message);
       if (!target) {
         return
       }
@@ -12109,7 +12436,7 @@ var serviceContext = (function () {
         const page = pages.find(page => page.$page.id === pageId);
         if (page) {
           callPageHook(page, eventType, args);
-        } else {
+        } else if (process.env.NODE_ENV !== 'production') {
           console.error(`Not Found：Page[${pageId}]`);
         }
       }
@@ -12290,23 +12617,26 @@ var serviceContext = (function () {
       subscribeHandler(data.type, data.data, data.pageId);
     });
 
-    subscribe(WEBVIEW_READY, onWebviewReady);
+    if (__uniConfig.renderer !== 'native') {
+      subscribe(WEBVIEW_READY, onWebviewReady);
 
-    const entryPagePath = '/' + __uniConfig.entryPagePath;
-    const routeOptions = __uniRoutes.find(route => route.path === entryPagePath);
-    if (!routeOptions.meta.isNVue) { // 首页是 vue
-      // 防止首页 webview 初始化过早， service 还未开始监听
-      publishHandler(WEBVIEW_READY, Object.create(null), [1]);
+      subscribe(VD_SYNC, onVdSync);
+      subscribe(VD_SYNC_CALLBACK, onVdSyncCallback);
+
+      const entryPagePath = '/' + __uniConfig.entryPagePath;
+      const routeOptions = __uniRoutes.find(route => route.path === entryPagePath);
+      if (!routeOptions.meta.isNVue) { // 首页是 vue
+        // 防止首页 webview 初始化过早， service 还未开始监听
+        publishHandler(WEBVIEW_READY, Object.create(null), [1]);
+      }
     }
+
     // 应该使用subscribe，兼容老版本先用 on api 吧
     on('api.' + WEB_INVOKE_APPSERVICE$1, function (data, webviewIds) {
       emit('onWebInvokeAppService', data, webviewIds);
     });
 
     subscribe('onWxsInvokeCallMethod', onWxsInvokeCallMethod);
-
-    subscribe(VD_SYNC, onVdSync);
-    subscribe(VD_SYNC_CALLBACK, onVdSyncCallback);
 
     subscribe(INVOKE_API, onInvokeApi);
 
@@ -12335,6 +12665,7 @@ var serviceContext = (function () {
   }
 
   function initGlobalListeners () {
+    const globalEvent = requireNativePlugin('globalEvent');
     const emit = UniServiceJSBridge.emit;
 
     // splashclosed 时开始监听 backbutton
@@ -12362,6 +12693,16 @@ var serviceContext = (function () {
       publish('onKeyboardHeightChange', {
         height: event.height
       });
+    });
+
+    globalEvent.addEventListener('uistylechange', function (event) {
+      publish('onUIStyleChange', {
+        style: event.uistyle
+      });
+    });
+
+    globalEvent.addEventListener('uniMPNativeEvent', function (event) {
+      publish('uniMPNativeEvent', event);
     });
 
     plus.globalEvent.addEventListener('plusMessage', onPlusMessage$1);
@@ -12468,7 +12809,7 @@ var serviceContext = (function () {
 
   function registerApp (appVm) {
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[uni-app] registerApp`);
+      console.log('[uni-app] registerApp');
     }
 
     appCtx = appVm;
@@ -12674,9 +13015,20 @@ var serviceContext = (function () {
     };
   }
 
+  /**
+   * mpvue event
+   */
+  function wrapperMPEvent (event) {
+    event.mp = Object.assign({
+      '@warning': 'mp is deprecated'
+    }, event);
+    event._processed = true;
+    return event
+  }
+
   const isAndroid = plus.os.name.toLowerCase() === 'android';
   const FOCUS_TIMEOUT = isAndroid ? 300 : 700;
-  const HIDE_TIMEOUT = 800;
+  const HIDE_TIMEOUT = isAndroid ? 800 : 300;
   let keyboardHeight = 0;
   let onKeyboardShow;
   let focusTimer;
@@ -12763,10 +13115,7 @@ var serviceContext = (function () {
     parseTargets(event);
     event.preventDefault = noop;
     event.stopPropagation = noop;
-    event.mp = event;
-    return Object.assign({
-      mp: event // mpvue
-    }, event)
+    return wrapperMPEvent(event)
   }
 
   const handleVdData = {
@@ -12846,9 +13195,12 @@ var serviceContext = (function () {
 
     removeVm (vm) {
       const cid = vm._$id;
-      // 移除尚未同步的data
-      this.batchData = this.batchData.filter(data => data[1][0] !== cid);
-      delete this.vms[cid];
+      if (vm === this.vms[cid]) { // 仅相同vm的才移除，否则保留
+        // 目前同一位置的vm，cid均一样
+        // 移除尚未同步的data
+        this.batchData = this.batchData.filter(data => data[1][0] !== cid);
+        delete this.vms[cid];
+      }
     }
 
     addElement (elm) {
@@ -12858,7 +13210,10 @@ var serviceContext = (function () {
     removeElement (elm) {
       const elmIndex = this.elements.indexOf(elm);
       if (elmIndex === -1) {
-        return console.error(`removeElement[${elm.cid}][${elm.nid}] not found`)
+        if (process.env.NODE_ENV !== 'production') {
+          console.error(`removeElement[${elm.cid}][${elm.nid}] not found`);
+        }
+        return
       }
       this.elements.splice(elmIndex, 1);
     }
@@ -12948,43 +13303,24 @@ var serviceContext = (function () {
     }
   }
 
+  function generateId (vm, parent) {
+    if (!vm.$parent) {
+      return '-1'
+    }
+    const vnode = vm.$vnode;
+    const context = vnode.context;
+    // slot 内的组件，需要补充 context 的 id，否则可能与内部组件索引值一致，导致 id 冲突
+    if (context && context !== parent && context._$id) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('generateId:' + context._$id + ';' + parent._$id + ',' + vnode.data.attrs._i);
+      }
+      return context._$id + ';' + parent._$id + ',' + vnode.data.attrs._i
+    }
+    return parent._$id + ',' + vnode.data.attrs._i
+  }
+
   function setResult (data, k, v) {
     data[k] = v;
-  }
-
-  function diffObject (newObj, oldObj, every = true) {
-    let result, key, cur, old;
-    for (key in newObj) {
-      cur = newObj[key];
-      old = oldObj[key];
-      if (old !== cur) {
-        if (!every) {
-          return newObj
-        }
-        setResult(result || (result = Object.create(null)), key, cur);
-      }
-    }
-    return result
-  }
-
-  function diffArray (newArr, oldArr) {
-    const newLen = newArr.length;
-    if (newLen !== oldArr.length) {
-      return newArr
-    }
-    if (isPlainObject(newArr[0])) {
-      for (let i = 0; i < newLen; i++) {
-        if (diffObject(newArr[i], oldArr[i], false)) {
-          return newArr
-        }
-      }
-    } else {
-      for (let i = 0; i < newLen; i++) {
-        if (newArr[i] !== oldArr[i]) {
-          return newArr
-        }
-      }
-    }
   }
 
   function diffElmData (newObj, oldObj) {
@@ -12992,21 +13328,8 @@ var serviceContext = (function () {
     for (key in newObj) {
       cur = newObj[key];
       old = oldObj[key];
-      if (old !== cur) {
-        // 全量同步 style (因为 style 可能会动态删除部分样式)
-        if (key === B_STYLE && isPlainObject(cur) && isPlainObject(old)) {
-          if (Object.keys(cur).length !== Object.keys(old).length) { // 长度不等
-            setResult(result || (result = Object.create(null)), B_STYLE, cur);
-          } else {
-            const style = diffObject(cur, old, false);
-            style && setResult(result || (result = Object.create(null)), B_STYLE, style);
-          }
-        } else if (key === V_FOR && Array.isArray(cur) && Array.isArray(old)) {
-          const vFor = diffArray(cur, old);
-          vFor && setResult(result || (result = Object.create(null)), V_FOR, vFor);
-        } else {
-          setResult(result || (result = Object.create(null)), key, cur);
-        }
+      if (!looseEqual(old, cur)) {
+        setResult(result || (result = Object.create(null)), key, cur);
       }
     }
     return result
@@ -13055,10 +13378,7 @@ var serviceContext = (function () {
       if (!this._$vd) {
         return
       }
-      // TODO 自定义组件中的 slot 数据采集是在组件内部，导致所在 context 中无法获取到差量数据
-      // 如何保证每个 vm 数据有变动，就加入 diff 中呢？
-      // 每次变化，可能触发多次 beforeUpdate，updated
-      // 子组件 updated 时，可能会增加父组件的 diffData，如 slot 等情况
+
       diff(this._$newData, this._$data, this._$vdUpdatedData);
       this._$data = JSON.parse(JSON.stringify(this._$newData));
       // setTimeout 一下再 nextTick（ 直接 nextTick 的话，会紧接着该 updated 做 flush，导致父组件 updated 数据被丢弃）
@@ -13085,11 +13405,7 @@ var serviceContext = (function () {
           this._$vdomSync = new VDomSync(this.$options.pageId, this.$options.pagePath, this);
         }
         if (this._$vd) {
-          if (!this.$parent) {
-            this._$id = '-1';
-          } else {
-            this._$id = this.$parent._$id + ',' + this.$vnode.data.attrs._i;
-          }
+          this._$id = generateId(this, this.$parent);
           this._$vd.addVm(this);
           this._$vdMountedData = Object.create(null);
           this._$setData(MOUNTED_DATA, this._$vdMountedData);
@@ -13416,21 +13732,25 @@ var serviceContext = (function () {
       Vue.prototype.$nextTick = function nextTick (cb) {
         const renderWatcher = this._watcher;
         const callback = typeof cb === 'function';
-        if (
-          renderWatcher &&
-          this._$queue.find(watcher => renderWatcher === watcher)
-        ) {
-          const result = new Promise((resolve) => {
+        const result = new Promise((resolve) => {
+          if (
+            renderWatcher &&
+            this._$queue.find(watcher => renderWatcher === watcher)
+          ) {
             vdSyncCallbacks.push(callback ? cb.bind(this) : resolve);
-          });
-          return callback ? result : undefined
-        } else {
-          // $nextTick bind vm context
-          return Vue.nextTick(callback ? () => cb.call(this) : undefined)
-        }
+          } else {
+            // $nextTick bind vm context
+            Vue.nextTick(callback ? () => cb.call(this) : resolve);
+          }
+          callback && resolve();
+        });
+        return callback ? undefined : result
       };
     }
   };
+
+  // 挂靠在uni上，暂不做全局导出
+  uni$1.__$wx__ = wx;
 
   UniServiceJSBridge.publishHandler = publishHandler;
   UniServiceJSBridge.invokeCallbackHandler = invokeCallbackHandler;

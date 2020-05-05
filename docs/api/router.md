@@ -100,6 +100,10 @@ export default {
 }
 ```
 
+Tips：
+
+* H5端调用`uni.reLaunch`之后之前页面栈会销毁，但是无法清空浏览器之前的历史记录，此时`navigateBack`不能返回，如果存在历史记录的话点击浏览器的返回按钮或者调用`history.back()`仍然可以导航到浏览器的其他历史记录。
+
 #### uni.switchTab(OBJECT)
 
 跳转到 tabBar 页面，并关闭其他所有非 tabBar 页面。
@@ -175,7 +179,7 @@ Tips：
 * ``reLaunch`` 可以打开任意页面。
 * 页面底部的 ``tabBar`` 由页面决定，即只要是定义为 ``tabBar`` 的页面，底部都有 ``tabBar``。
 * 不能在 ```App.vue``` 里面进行页面跳转。
-* H5端页面刷新之后页面栈会消失，此时`navigateBack`不能返回，如果一定要返回可以使用`history.back()`。
+* H5端页面刷新之后页面栈会消失，此时`navigateBack`不能返回，如果一定要返回可以使用`history.back()`导航到浏览器的其他历史记录。
 
 **参考事项**
 - 页面路由拦截和管理，插件市场有很多封装好的工具类，搜索[路由](https://ext.dcloud.net.cn/search?q=%E8%B7%AF%E7%94%B1)
@@ -247,4 +251,4 @@ pages.json 中配置的是窗口显示的动画
 **注意**
 - 纯nvue项目（render为native），窗体动画默认进入动画为popin，返回为pop-out。如果想修改动画类型，只能通过uni.navigateTo API修改，在组件或pages.json里配置动画类型无效
 - 非纯nvue项目，App端窗体动画，默认进入动画为slider-in-right，默认返回动画为pop-out
-
+- webview 中嵌入 uni-app H5时，使用 uni.webView.navigateTo... 跳转页面

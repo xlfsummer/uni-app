@@ -10,7 +10,6 @@ const {
   ssrCompileToFunctions
 } = require('@dcloudio/vue-cli-plugin-uni/packages/vue-template-compiler')
 
-const platforms = require('./platforms')
 const traverseScript = require('./script/traverse')
 const generateScript = require('./script/generate')
 const traverseTemplate = require('./template/traverse')
@@ -33,6 +32,10 @@ const {
   compileTemplate
 } = require('./auto-components')
 
+const isWin = /^win/.test(process.platform)
+
+const normalizePath = path => (isWin ? path.replace(/\\/g, '/') : path)
+
 module.exports = {
   compile (source, options = {}) {
     if ( // 启用摇树优化后,需要过滤内置组件
@@ -41,6 +44,9 @@ module.exports = {
     ) {
       (options.modules || (options.modules = [])).push(autoComponentsModule)
     }
+
+    // transformAssetUrls
+    (options.modules || (options.modules = [])).push(require('./asset-url'))
 
     options.isUnaryTag = isUnaryTag
     // 将 autoComponents 挂在 isUnaryTag 上边
@@ -72,9 +78,12 @@ module.exports = {
         console.error(source)
         throw e
       }
+    } else if (options['quickapp-vue']) {
+      // 后续改版，应统一由具体包实现
+      (options.modules || (options.modules = [])).push(require('@dcloudio/uni-quickapp-vue/lib/compiler-module'))
     }
 
-    if (!options.mp) { // h5
+    if (!options.mp) { // h5,quickapp-vue
       return compileTemplate(source, options, compile)
     }
 
@@ -90,7 +99,7 @@ module.exports = {
       optimize: false
     }), compile)
 
-    options.mp.platform = platforms[options.mp.platform]
+    options.mp.platform = require('./mp')(options.mp.platform)
 
     options.mp.scopeId = options.scopeId
 
@@ -184,10 +193,20 @@ at ${resourcePath}.vue:1`)
       options.mp.filterModules.forEach(name => {
         const filterModule = options.filterModules[name]
         if (filterModule.type !== 'renderjs' && filterModule.attrs.lang !== 'renderjs') {
+          if (
+            filterModule.attrs &&
+            filterModule.attrs.src &&
+            filterModule.attrs.src.indexOf('@/') === 0
+          ) {
+            const src = filterModule.attrs.src
+            filterModule.attrs.src = normalizePath(path.relative(
+              path.dirname(resourcePath), src.replace('@/', '')
+            ))
+          }
           filterTemplate.push(
             options.mp.platform.createFilterTag(
               options.filterTagName,
-              options.filterModules[name]
+              filterModule
             )
           )
         }

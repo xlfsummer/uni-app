@@ -44,27 +44,27 @@ function getH5Options (manifestJson) {
     manifestJson = getManifestJson()
   }
 
-  const h5 = manifestJson.h5 || {}
+  const h5 = manifestJson[process.env.UNI_SUB_PLATFORM || process.env.UNI_PLATFORM] || {}
 
   h5.appid = (manifestJson.appid || '').replace('__UNI__', '')
 
   h5.title = h5.title || manifestJson.name || ''
 
-  if (process.env.UNI_SUB_PLATFORM === 'mp-360') { // 360 小程序仅支持 hash 模式
-    h5.router = Object.assign({}, defaultRouter)
-  } else {
-    h5.router = Object.assign({}, defaultRouter, h5.router || {})
-  }
+  h5.router = Object.assign({}, defaultRouter, h5.router || {})
 
-  h5['async'] = Object.assign({}, defaultAsync, h5['async'] || {})
+  h5.async = Object.assign({}, defaultAsync, h5.async || {})
 
   let base = h5.router.base
 
-  if (base.indexOf('/') !== 0) {
+  if (!base.startsWith('/') && !base.startsWith('./')) {
     base = '/' + base
   }
-  if (base.substr(-1) !== '/') {
+  if (!base.endsWith('/')) {
     base = base + '/'
+  }
+  // 相对路径仅支持 hash 模式
+  if (base.startsWith('./')) {
+    h5.router.mode = defaultRouter.mode
   }
 
   h5.router.base = base
@@ -72,16 +72,16 @@ function getH5Options (manifestJson) {
   if (process.env.NODE_ENV === 'production') { // 生产模式，启用 publicPath
     h5.publicPath = h5.publicPath || base
 
-    if (h5.publicPath.substr(-1) !== '/') {
+    if (!h5.publicPath.endsWith('/')) {
       h5.publicPath = h5.publicPath + '/'
     }
   } else { // 其他模式，启用 base
-    h5.publicPath = base
-  }
-
-  if (process.env.UNI_SUB_PLATFORM === 'mp-360') {
-    h5.router.base = '/'
-    h5.publicPath = '/'
+    if (base.startsWith('./')) {
+      // 在开发模式, publicPath 如果为 './' webpack-dev-server 匹配文件时会失败
+      h5.publicPath = base.substr(1)
+    } else {
+      h5.publicPath = base
+    }
   }
 
   /* eslint-disable no-mixed-operators */
@@ -89,6 +89,11 @@ function getH5Options (manifestJson) {
     '../../../../public/index.html')
 
   h5.devServer = h5.devServer || {}
+
+  // 插件修改 h5Options
+  global.uniPlugin.configureH5.forEach(configureH5 => {
+    configureH5(h5)
+  })
 
   return h5
 }
